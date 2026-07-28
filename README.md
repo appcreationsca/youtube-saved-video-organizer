@@ -96,6 +96,12 @@ python youtube_cleaner.py undo --execute  # actually move them back
 
 # DRY-RUN: age-purge one playlist (older than 2 years) — no changes
 python youtube_cleaner.py autopurge --playlist PLxxxxxxxx --years 2
+
+# DRY-RUN: find deleted/private videos across ALL your playlists — no changes
+python youtube_cleaner.py remove-unavailable
+
+# Actually remove the dead entries (scan one playlist, type DELETE to confirm)
+python youtube_cleaner.py remove-unavailable --playlist PLxxxxxxxx --execute
 ```
 
 ### `clean` options
@@ -222,6 +228,31 @@ back into the source playlist it came from. Idempotent and quota-capped.
 
 > Undo journals live in `history/` and contain your video titles/IDs, so they're
 > **git-ignored** and never leave your machine.
+
+### `remove-unavailable` options
+
+Removes **deleted** and **private** videos (the "Deleted video" / "Private video"
+placeholders YouTube leaves behind) from your playlists to free up space. Scans
+**all** your playlists unless `--playlist` is given. Dry-run by default.
+
+| Option           | Meaning                                                                       |
+|------------------|-------------------------------------------------------------------------------|
+| `--playlist ID`  | Restrict to a single playlist ID. Omit to scan every playlist you own.        |
+| `--execute`      | Actually delete (type `DELETE` to confirm). Omit for a safe dry-run.          |
+| `--max-deletes`  | Safety cap per run (default 150, min 1). Each delete costs ~50 quota units.    |
+| `--protect`      | Comma-separated playlist **titles** to skip when scanning all (ignored with `--playlist`). |
+| `--json PATH`    | Also write the full list of dead entries to this file (an audit record).       |
+| `--yes`          | Skip the typed `DELETE` prompt (for scripts).                                 |
+
+> **How it detects dead videos:** it batch-checks each video ID against
+> `videos.list`. A video that is present in the playlist but **absent** from that
+> lookup is either deleted or private-and-not-yours — a reliable signal that
+> doesn't depend on the (localizable, spoofable) placeholder title. Region-blocked
+> and normal videos still resolve, so they're never flagged.
+>
+> **Not reversible.** Unlike `sort`/`apply`, this removal has **no `undo`** — a
+> deleted video is gone from YouTube and a private video can't be re-added, so
+> there is nothing to restore. Use the dry-run (and `--json`) to review first.
 
 ---
 
@@ -365,8 +396,15 @@ step (so it doesn't act on stale elements), and can restrict to watched videos.
   weekly until the app passes OAuth verification.
 - **`token.json` holds a plaintext refresh token.** It is git-ignored, but protect
   the file locally (don't share it).
-- **Watch Later and History are not accessible** by any YouTube API. *Liked
-  videos* are accessible separately via `videos.list(myRating=like)`.
+- **Watch Later and History are not accessible** by any YouTube API — including
+  `clean`, `autopurge`, and `remove-unavailable`. If you pass one of the system
+  playlist IDs (`WL`, `HL`, `LL`, `FL`, `LM`), the tool prints an honest notice and
+  makes **no** changes rather than failing with a confusing error. *Liked videos*
+  are readable separately via `videos.list(myRating=like)` but can't be edited as a
+  playlist. To clear Watch Later, use the browser userscript below.
+- **Removing dead videos is permanent.** `remove-unavailable` deletes deleted/private
+  placeholder entries and cannot be undone (the underlying video is gone or private),
+  so review the dry-run — and optionally `--json` — before `--execute`.
 
 ### Unattended daily task (optional)
 

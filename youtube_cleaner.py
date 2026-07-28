@@ -213,6 +213,41 @@ def fetch_playlists(youtube) -> list[dict]:
     return playlists
 
 
+# YouTube "system" playlists. The Data API cannot list or modify these: Watch
+# Later (WL) and History (HL) have been closed to all programmatic access since
+# ~2016, and Liked/Favorites aren't editable as playlists. mine=True never
+# returns them, so we detect them by ID to print an honest message instead of a
+# misleading "not one of your playlists" error.
+SPECIAL_PLAYLISTS = {
+    "WL": "Watch Later",
+    "HL": "History",
+    "LL": "Liked videos",
+    "LM": "Liked music",
+    "FL": "Favorites",
+    "HC": "History",
+}
+
+
+def special_playlist_name(playlist_id: str | None) -> str | None:
+    """Return the friendly name if playlist_id is a system playlist we can't touch."""
+    if not playlist_id:
+        return None
+    return SPECIAL_PLAYLISTS.get(playlist_id.strip().upper())
+
+
+def _special_playlist_notice(name: str, playlist_id: str) -> None:
+    """Explain, honestly, that a system playlist is off-limits to the Data API."""
+    print(
+        f"\n'{name}' ({playlist_id}) is a YouTube system playlist the Data API "
+        "cannot access.\n"
+        "  Watch Later and History have been closed to all API access since ~2016,\n"
+        "  and Liked/Favorites can't be edited as a playlist. There is no way to\n"
+        "  list or remove their items programmatically -- nothing was changed.\n"
+        "  -> Clean these from the YouTube website, or use the Watch Later\n"
+        "     userscript documented in the README."
+    )
+
+
 def fetch_playlist_items(youtube, playlist_id: str) -> list[dict]:
     """Return all items in a playlist with both relevant dates."""
     items: list[dict] = []
@@ -1140,6 +1175,11 @@ def _delete_items(youtube, to_delete: list[dict]) -> tuple[int, int, bool]:
 def cmd_clean(args) -> None:
     youtube = get_service()
 
+    special = special_playlist_name(args.playlist)
+    if special:
+        _special_playlist_notice(special, args.playlist)
+        return
+
     # Verify the playlist is actually one the user owns, and get its title.
     owned = fetch_playlists(youtube)
     match = next((p for p in owned if p["id"] == args.playlist), None)
@@ -1242,6 +1282,10 @@ def cmd_autopurge(args) -> None:
     # Resolve target playlists (opt-in only).
     targets: list[dict] = []
     if args.playlist:
+        special = special_playlist_name(args.playlist)
+        if special:
+            _special_playlist_notice(special, args.playlist)
+            return
         p = by_id.get(args.playlist)
         if p is None:
             sys.exit(
@@ -1983,6 +2027,10 @@ def cmd_remove_unavailable(args) -> None:
     protect = frozenset(t.strip() for t in args.protect.split(",") if t.strip())
 
     if args.playlist:
+        special = special_playlist_name(args.playlist)
+        if special:
+            _special_playlist_notice(special, args.playlist)
+            return
         targets = [p for p in owned if p["id"] == args.playlist]
         if not targets:
             sys.exit(
