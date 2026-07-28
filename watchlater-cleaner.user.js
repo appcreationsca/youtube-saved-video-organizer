@@ -180,7 +180,10 @@
   // - watchedOnly=false + target=N  -> delete N oldest (batched).
   // - watchedOnly=true  + target=0  -> delete all watched (fallback path).
   // - unavailableOnly=true + target=0 -> delete all private/deleted rows.
-  async function removeLoop({ watchedOnly, unavailableOnly = false, watchedThreshold = 90, target, delay, status, progress, batched }) {
+  // In oldest mode, excludeWatched / excludeUnavailable (set when the user also
+  // ticked those sweeps) skip watched / private-deleted rows so the same row is
+  // never double-handled across sweeps and the totals stay additive.
+  async function removeLoop({ watchedOnly, unavailableOnly = false, watchedThreshold = 90, target, delay, status, progress, batched, excludeWatched = false, excludeUnavailable = false }) {
     if (running) return 0;
     running = true;
 
@@ -213,11 +216,15 @@
       const rows = videoRows().filter((r) =>
         unavailableOnly ? isUnavailableRow(r)
         : watchedOnly ? watchedPercent(r) >= watchedThreshold
+        : (excludeUnavailable && isUnavailableRow(r)) ? false
+        : (excludeWatched && watchedPercent(r) >= watchedThreshold) ? false
         : true);
 
       if (rows.length === 0) {
-        if ((watchedOnly || unavailableOnly) && videoRows().length >= MAX_SCAN) {
-          const kind = unavailableOnly ? 'private/deleted' : `watched \u2265${watchedThreshold}%`;
+        if ((watchedOnly || unavailableOnly || excludeWatched || excludeUnavailable) && videoRows().length >= MAX_SCAN) {
+          const kind = unavailableOnly ? 'private/deleted'
+            : watchedOnly ? `watched \u2265${watchedThreshold}%`
+            : 'oldest (excluding watched/unavailable)';
           status(`Scanned ${videoRows().length} rows; removed ${done} ${kind} this pass. Reload the page and Start again to continue (progress saved, lifetime ${lifetime.get()}).`);
           break;
         }
@@ -373,7 +380,7 @@
     try {
       if (doOldest && oldestCount > 0) {
         status(`Deleting ${oldestCount} oldest in batches of ${BATCH_SIZE}…`);
-        oldestDone = await removeLoop({ watchedOnly: false, target: oldestCount, delay, status, progress, batched: true });
+        oldestDone = await removeLoop({ watchedOnly: false, target: oldestCount, delay, status, progress, batched: true, excludeWatched: doWatched, excludeUnavailable: doUnavailable });
       }
 
       if (doWatched && !stopRequested) {
@@ -662,6 +669,9 @@
         const batches = Math.ceil(n / BATCH_SIZE);
         lines.push(`• Delete the ${n} OLDEST videos — ${batches} batch(es) of ${BATCH_SIZE}, from the top.`);
         lines.push('  (Make sure the page is sorted "Date added (oldest)".)');
+        if (doWatched || doUnavail) {
+          lines.push('  (The oldest sweep skips watched/unavailable rows — handled by their own passes below — so nothing is deleted twice and the totals add up.)');
+        }
       }
       if (doWatched) {
         lines.push(`• Delete WATCHED videos (only those watched ≥ ${thr}%) — separate action, NOT counted in the ${doOldest ? n : 'oldest'} number.`);
