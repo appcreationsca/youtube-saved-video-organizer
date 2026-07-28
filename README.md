@@ -172,7 +172,10 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 No automatic classifier is perfect — categories are subjective, and a few videos
 per batch will land somewhere you disagree with (in our own testing, ~90–95% of
 picks matched expectations). The design assumes this and puts **you** in control:
-it **suggests, you approve**. Nothing is ever moved silently.
+it **suggests, you approve**. Interactive runs never move anything silently — the
+one exception is the optional unattended `autosort` scheduled task, which runs
+`--execute` on a timer without a prompt (and without an undo journal); see
+[Known limitations & edge cases](#known-limitations--edge-cases).
 
 **The safe loop — review, correct, then approve:**
 
@@ -192,21 +195,31 @@ it **suggests, you approve**. Nothing is ever moved silently.
    --execute`. The page is fully client-side (system fonts, no network requests)
    so nothing about your library leaves your browser, and `apply` still moves
    exactly what the file says — no re-classification.
-3. **Undo.** Every `--execute` run writes an **undo journal** to `history/`. If
-   you don't like the result, **`undo --execute`** puts every moved video back in
-   its original playlist. Run `undo` alone first for a dry-run preview.
+3. **Undo.** Every **interactive** `sort`/`apply --execute` run writes an **undo
+   journal** to `history/`. If you don't like the result, **`undo --execute`**
+   moves each video back to the playlist it came from (matched by **video ID**).
+   Run `undo` alone first for a dry-run preview. Caveats: the scheduled `autosort`
+   does **not** journal (so it can't be undone this way), the journal is written
+   when the run finishes (a crash mid-run leaves no journal), and `undo` will
+   **skip rather than guess** a video whose original playlist was since renamed or
+   deleted. See [Known limitations & edge cases](#known-limitations--edge-cases).
 
 **Why this is safe by construction:**
 
 - **Dry-run by default** on every write command (`sort`, `apply`, `undo`,
-  `clean`, `autopurge`) — you always see the plan before anything changes.
+  `clean`, `autopurge`) — you always see the plan before anything changes. (The
+  scheduled `autosort`/`autopurge` tasks you set up yourself run `--execute` on a
+  timer by design.)
 - **Abstain on uncertainty.** When the AI isn't confident a video belongs in one
   of *your* playlists, it leaves it in place rather than guess. Tune how eager it
   is with `ai.abstain` (`high` / `normal` / `low` — see the config reference).
-- **Only your own playlists** are ever used as targets — it can't invent odd
-  categories.
-- **No data loss.** Moves are insert-before-delete, so an interrupted run (e.g.
-  quota) never drops a video, and `undo` fully reverses a completed run.
+- **Targets are your own playlists** — never arbitrary categories. The only
+  playlists the tool creates are ones **you** mapped in the `setup` wizard or
+  named in a rule, and only lazily on first match (`create_missing`), dry-run
+  previewed as "would create". It never invents a playlist you didn't configure.
+- **Insert-before-delete** ordering: an interrupted run (e.g. quota) never *drops*
+  a video (see the duplicate caveat below), and `undo` reverses a completed
+  interactive run that produced a journal.
 - A wrong sort is **not destructive** — the video is just in a different
   playlist, and one command moves it back.
 
@@ -389,7 +402,11 @@ web UI on your own machine.
 
 Both paths run the identical script, so the three opt-in modes below behave
 identically either way. Re-pasting into the console is safe — it **replaces** the
-panel instead of stacking a duplicate.
+panel instead of stacking a duplicate, and a fresh paste also **invalidates any
+delete loop still running** from a previous paste so only one loop can ever be
+deleting. A running sweep also **stops itself if the page navigates to a
+different playlist** mid-run, so it never deletes from a playlist you didn't start
+it on.
 
 > **Bookmarklets are not supported.** YouTube's Content-Security-Policy blocks
 > `javascript:` URLs, so a bookmarklet can't inject the script — use the extension
@@ -454,11 +471,77 @@ private video can't be restored).
 
 `daily_sort.ps1` chains the maintenance steps for a Windows Scheduled Task:
 clear dead videos → **opt-in age-purge** → sort each of your configured source
-playlists, each capped to stay under the daily quota and resumable if quota runs
-out. It's a **template** — edit the `$SOURCES` list at the top to your own source
-playlist IDs. The age-purge step is a **safe no-op** until you add an enabled
-`purge` block to `config.json`, so existing setups are unaffected. Re-run `auth`
-if a run logs an auth error (testing-mode tokens expire ~weekly).
+playlists. Each step and each source has its **own** per-run cap; note these caps
+are **per source, not a single global budget**, so a run touching several sources
+can exceed one cap's worth of writes in total. The API itself still hard-stops the
+day's writes when the shared ~10,000-unit quota is exhausted, and runs are
+**resumable** — the next run finishes what quota cut short. It's a **template** —
+edit the `$SOURCES` list at the top to your own source playlist IDs. The age-purge
+step is a **safe no-op** until you add an enabled `purge` block to `config.json`,
+so existing setups are unaffected. Re-run `auth` if a run logs an auth error
+(testing-mode tokens expire ~weekly).
+
+---
+
+## Known limitations & edge cases
+
+These are deliberate simplifications in this prototype. None cause silent data
+loss, but know them before relying on the tool unattended:
+
+**Undo & journaling**
+- **The journal is written when a run finishes**, not incrementally. If an
+  interactive `sort`/`apply --execute` run is killed mid-way (crash, closed
+  terminal), the moves already made have **no journal**, so `undo` can't reverse
+  them. Re-running is still safe (idempotent); you'd just re-organise manually.
+- **The scheduled `autosort` task does not write a journal and does not prompt.**
+  It's meant for hands-off maintenance — there's no `undo` for its moves. Use
+  interactive `sort` if you want the review/undo safety net.
+- **`undo` restores by video ID but resolves the destination playlist by name.**
+  If you renamed or deleted the original source playlist after the run, `undo`
+  **skips that video with a warning** rather than guessing or recreating it.
+
+**Apply / plan routing**
+- **Playlists are matched by title, not ID.** If you have two playlists with the
+  *same name*, they collapse to one target — moves may land in whichever the API
+  returns first. Give playlists distinct names.
+- **A plan represents each video once** (deduped by video ID). If the same video
+  legitimately sits in two source playlists, the plan/undo model tracks a single
+  occurrence.
+- **`apply` trusts the plan you hand it.** It uses your config's `create_missing`
+  setting and the targets in the file; a video that's already absent from the
+  source is reported as "already done" rather than independently verified to have
+  reached its target. Review the dry-run / HTML page before `--execute`.
+- **Quota-boundary duplicate (documented above):** if a run is interrupted in the
+  instant between *insert* and *delete*, a video can briefly exist in **both**
+  playlists. Re-running finishes the rest; delete the stray copy if you spot one.
+  A video is never lost.
+
+**Watch Later userscript**
+- **Deletions are permanent — there is no undo.** Every mode is opt-in and
+  confirmed, but once a row is removed it's gone.
+- **"Delete oldest" trusts the page's sort order.** It removes from the *top* of
+  the list, so it's only truly "oldest-first" if you set **"Date added (oldest)"**
+  first (the panel reminds you). With any other sort it removes whatever is on top.
+- **A row is counted as removed when the remove action succeeds**, not by
+  re-confirming the row vanished; the loop re-scans each step, but a UI hiccup
+  could in theory miscount. Watch the live counter and the list as it runs.
+- **The private/deleted sweep matches the English placeholder titles**
+  `[Private video]` / `[Deleted video]` only — switch your YouTube UI to English
+  before running it. Rows whose title can't be read are **kept**, never removed.
+- **Automating the YouTube UI is against YouTube's ToS** and is for personal use
+  on your own account only. It's inherently fragile: a YouTube DOM change can break
+  the selectors until the script is updated.
+
+**Auth, quota & testing**
+- **`token.json` is a plaintext refresh token** (git-ignored) — protect it locally.
+- **Quota is shared per Google Cloud project** (~10,000 units/day), and the daily
+  task's caps are **per source**, not one global budget (see the daily-task note).
+- **AI classification is non-deterministic** — the same titles can classify
+  slightly differently between runs, and larger `ai.batch_size` sorts more
+  aggressively. Always review a dry-run before executing, and verify your provider
+  actually responds (a dry-run makes the real API calls) before an `--execute` run.
+- **No automated test suite ships yet.** Changes are validated with `py_compile` /
+  `node --check` and manual/dry-run checks; contributions adding tests are welcome.
 
 ---
 

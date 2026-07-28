@@ -4,7 +4,7 @@
  * Paste this whole block into the browser Console (F12) while you
  * are ON your Watch Later page:  https://www.youtube.com/playlist?list=WL
  *
- * It verifies every selector the v2.1 cleaner relies on and prints a
+ * It verifies every selector the cleaner relies on and prints a
  * PASS/FAIL report. It OPENS the playlist ⋮ menu to look for
  * "Remove watched videos", reads the label, then CLOSES the menu.
  * It never clicks delete, never clicks a confirm button.

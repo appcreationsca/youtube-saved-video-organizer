@@ -412,6 +412,47 @@ def positive_years(value: str) -> int:
     return parsed
 
 
+def _validate_purge_settings(years, basis, budget):
+    """Fail-closed validation of purge settings that may come from config.json.
+
+    The argparse validators only guard the CLI --flags. Values pulled from
+    config.json's `purge` block (years / date_basis / daily_delete_budget)
+    bypass argparse entirely, so a stray 0, negative, decimal, or misspelled
+    basis could silently mass-delete or delete against the wrong date field
+    (e.g. date_basis="saved" would otherwise fall through to 'published').
+    Validate here, before any scan or delete. Returns normalized
+    (years:int, basis:str, budget:int); exits with a clear error on bad input.
+    """
+    ytext = str(years).strip()
+    try:
+        y_int = int(ytext)
+    except (TypeError, ValueError):
+        sys.exit(
+            f"ERROR: purge years must be a whole number >= 1, got {years!r}. "
+            "Fix purge.years in config.json or pass --years N."
+        )
+    if ytext != str(y_int) or y_int < 1:
+        sys.exit(
+            f"ERROR: purge years must be a whole number >= 1 with no decimals, "
+            f"got {years!r}. Fix purge.years in config.json or pass --years N."
+        )
+    if basis not in ("added", "published"):
+        sys.exit(
+            f"ERROR: purge date_basis must be 'added' or 'published', got {basis!r}. "
+            "Fix purge.date_basis in config.json or pass --date-basis."
+        )
+    try:
+        b_int = int(str(budget).strip())
+    except (TypeError, ValueError):
+        sys.exit(
+            f"ERROR: purge daily budget must be a whole number >= 1, got {budget!r}. "
+            "Fix purge.daily_delete_budget in config.json or pass --daily-budget."
+        )
+    if b_int < 1:
+        sys.exit(f"ERROR: purge daily budget must be >= 1, got {budget!r}.")
+    return y_int, basis, b_int
+
+
 # ---------------------------------------------------------------------------
 # Classification (compliant: user rules + API-provided categoryId only)
 # ---------------------------------------------------------------------------
@@ -1320,6 +1361,10 @@ def cmd_autopurge(args) -> None:
         print("No purge targets to process. Nothing deleted.")
         return
 
+    # Fail-closed: values may have come from config.json (which bypasses the CLI
+    # validators). Reject bad years/basis/budget BEFORE any scan or delete.
+    years, basis, budget = _validate_purge_settings(years, basis, budget)
+
     cutoff = _age_cutoff(years)
     basis_key = "added_at" if basis == "added" else "published_at"
 
@@ -1629,19 +1674,25 @@ def render_sort_html(source: dict, plan_by_target: dict[str, list[dict]],
             f'<ol class="vids">{"".join(rows)}</ol></details>'
         )
 
-    # Embed the plan so the download rebuilds source.id/title verbatim. Escape the
-    # angle brackets/ampersand so a video title can't break out of <script>.
-    plan_json = json.dumps(
+    # Embed the plan so the download rebuilds source.id/title verbatim. json.dumps
+    # already escapes quotes/backslashes/control chars into a valid JS string
+    # literal; for safe <script> embedding we ONLY additionally neutralize the
+    # characters that could terminate the element or are illegal in a JS string:
+    # `<` (so `</script>` in a title can't close the block), `>` and `&` (defense
+    # in depth), and U+2028/U+2029 (valid in JSON, but line terminators in JS).
+    # NOTE: we must NOT re-escape backslashes here — doubling them corrupts the
+    # already-valid JSON and lets a title containing a quote break out (code exec).
+    def _embed(obj) -> str:
+        s = json.dumps(obj, ensure_ascii=False)
+        return (s.replace("<", "\\u003c").replace(">", "\\u003e")
+                 .replace("&", "\\u0026")
+                 .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+    plan_json = _embed(
         {"source": {"id": source.get("id", ""), "title": source.get("title", "")},
          "total": total,
-         "by_target": plan_by_target},
-        ensure_ascii=False,
-    )
-    plan_json = (plan_json.replace("\\", "\\\\").replace("<", "\\u003c")
-                 .replace(">", "\\u003e").replace("&", "\\u0026"))
-    owned_json = json.dumps(owned, ensure_ascii=False)
-    owned_json = (owned_json.replace("\\", "\\\\").replace("<", "\\u003c")
-                  .replace(">", "\\u003e").replace("&", "\\u0026"))
+         "by_target": plan_by_target})
+    owned_json = _embed(owned)
 
     src_title = esc(source.get("title", ""))
     src_id = esc(source.get("id", ""))

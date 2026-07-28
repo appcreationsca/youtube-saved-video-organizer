@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Later & Playlist Cleaner (personal)
 // @namespace    https://github.com/your-name/yt-saved-organizer
-// @version      2.6.1
+// @version      2.7.0
 // @description  Bulk-remove videos from your YouTube "Watch Later" (or any open playlist) via the UI, oldest-first, in batches of 100, at 5,000+ scale. This is the ONLY way to clear Watch Later, since no official API can touch it.
 // @match        https://www.youtube.com/playlist?list=*
 // @grant        none
@@ -67,6 +67,20 @@
   let stopRequested = false;
   let running = false;        // guards a single remove loop
   let orchestrating = false;  // guards the Start button
+
+  // Cross-execution / navigation safety (permanent deletes — do not skip).
+  // A console-paste user may paste the whole script again while a delete loop is
+  // running; each paste is a fresh IIFE with its OWN stopRequested/running, so
+  // the old loop can't be reached to stop it. A window-level generation token
+  // fixes that: every execution bumps it, and a running loop bails the instant it
+  // is no longer the newest generation, so a stale loop self-terminates and only
+  // one loop ever deletes. The per-run playlist check (see removeLoop) additionally
+  // stops a loop if the page SPA-navigates to a DIFFERENT playlist mid-run, so we
+  // never delete from a playlist the run did not start on. Tampermonkey runs once,
+  // so the token stays newest and behavior is unchanged there.
+  const WLC_GEN = (window.__wlcGen = (window.__wlcGen || 0) + 1);
+  const isCurrentGen = () => window.__wlcGen === WLC_GEN;
+  const currentList = () => new URLSearchParams(location.search).get('list');
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const listId = new URLSearchParams(location.search).get('list') || 'unknown';
@@ -194,6 +208,12 @@
     const startedAt = Date.now();
     const totalBatches = target ? Math.ceil(target / BATCH_SIZE) : 0;
 
+    // Anchor this run to the playlist it started on and to this script generation.
+    // If either changes (SPA-nav to another playlist, or a newer paste took over),
+    // the loop stops before touching any row — deletes are permanent.
+    const runList = currentList();
+    const sameContext = () => isCurrentGen() && currentList() === runList;
+
     const report = (extra) => {
       const perMs = done > 0 ? (Date.now() - startedAt) / done : 0;
       let msg = unavailableOnly ? `Unavailable removed ${done}`
@@ -210,7 +230,7 @@
       if (progress) progress({ done, target, watchedOnly, unavailableOnly });
     };
 
-    while (!stopRequested) {
+    while (!stopRequested && sameContext()) {
       if (target && done >= target) break;
 
       const rows = videoRows().filter((r) =>
@@ -239,6 +259,7 @@
       }
       emptyScrolls = 0;
 
+      if (!sameContext()) break; // playlist changed or a newer paste took over
       const ok = await removeRow(rows[0], curDelay);
       if (ok) {
         done++;
@@ -263,6 +284,12 @@
         await sleep(curDelay);
       }
       await sleep(curDelay);
+    }
+
+    if (!stopRequested && !sameContext()) {
+      status(isCurrentGen()
+        ? 'Stopped: the page moved to a different playlist mid-run — nothing was deleted there. Go back to the intended playlist and Start again.'
+        : 'Stopped: a newer paste of the script took over this tab. Use the current panel to continue.');
     }
 
     running = false;
@@ -460,7 +487,7 @@
       kids: [
         el('span', 'display:flex;align-items:baseline;gap:8px;min-width:0', {
           kids: [
-            el('span', 'white-space:nowrap', { text: '\uD83E\uDDF9 Playlist Cleaner v2.6.1' }),
+            el('span', 'white-space:nowrap', { text: '\uD83E\uDDF9 Playlist Cleaner v2.7.0' }),
             el('span', 'font-size:11px;color:#69f0ae;font-weight:600;white-space:nowrap', { id: 'wlc-tbprog', text: '' }),
           ],
         }),
