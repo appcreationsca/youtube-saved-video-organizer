@@ -14,6 +14,9 @@ rules.json
 # Generated artifacts (sort previews, plan dumps — contain your video titles)
 output/
 
+# Generated console-paste page (rebuild with `node tools/build-console-page.js`)
+watchlater-console.html
+
 # Undo journals (record your moved video titles/ids — local safety net only)
 history/
 

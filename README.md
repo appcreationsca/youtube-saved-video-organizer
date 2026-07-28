@@ -377,11 +377,27 @@ web UI on your own machine.
 > ⚠️ **Personal use only.** Automating YouTube's UI is against its Terms of Service
 > and could put your account at risk. Removals are permanent. Do not ship this.
 
-**Install & use:**
-1. Install [Tampermonkey](https://tampermonkey.net/) or Violentmonkey.
-2. Add `watchlater-cleaner.user.js`.
-3. Open <https://www.youtube.com/playlist?list=WL> (or any playlist).
-4. In the panel (top-right), tick any combination of three independent modes and
+**Two ways to run it — pick one:**
+
+- **Persistent (recommended for repeat use):** install
+  [Tampermonkey](https://tampermonkey.net/) or Violentmonkey and add
+  `watchlater-cleaner.user.js`. It then loads automatically on every playlist page.
+- **One-time, no install:** open `watchlater-console.html` (generate it with
+  `node tools/build-console-page.js`), click **Copy script**, then on the Watch
+  Later page press <kbd>F12</kbd> → **Console**, type `allow pasting` + Enter the
+  first time if prompted, paste, and press Enter. The panel appears just the same.
+
+Both paths run the identical script, so the three opt-in modes below behave
+identically either way. Re-pasting into the console is safe — it **replaces** the
+panel instead of stacking a duplicate.
+
+> **Bookmarklets are not supported.** YouTube's Content-Security-Policy blocks
+> `javascript:` URLs, so a bookmarklet can't inject the script — use the extension
+> or the console-paste path above.
+
+**Use:**
+1. Open <https://www.youtube.com/playlist?list=WL> (or any playlist).
+2. In the panel (top-right), tick any combination of three independent modes and
    press **Start** (hit **Stop** anytime; adjust the delay if YouTube throttles you):
    - **Delete oldest videos** — the N oldest, in batches from the top (sort the
      page "Date added (oldest)" first).

@@ -407,8 +407,21 @@
 
   // ---- UI panel -----------------------------------------------------------
 
-  function buildPanel() {
-    if (document.getElementById('wl-cleaner-panel')) return;
+  function buildPanel(replace) {
+    // Single-injection guard. A console-paste user may paste the whole script
+    // twice; Tampermonkey injects once. On an explicit (re)build (replace=true,
+    // used by the bootstrap that runs on each fresh execution) tear down any
+    // prior panel — its leaked window drag listeners + refresh timer, via the
+    // cleanup closure stashed on the node — then rebuild. On SPA navigation
+    // (replace=false) keep the existing panel untouched (unchanged behavior).
+    const existing = document.getElementById('wl-cleaner-panel');
+    if (existing) {
+      if (!replace) return;
+      if (typeof existing._wlcCleanup === 'function') {
+        try { existing._wlcCleanup(); } catch (e) {}
+      }
+      existing.remove();
+    }
 
     const panel = document.createElement('div');
     panel.id = 'wl-cleaner-panel';
@@ -523,6 +536,11 @@
 
     document.body.appendChild(panel);
 
+    // Handles for teardown (see panel._wlcCleanup below): the window-level drag
+    // listeners and the lifetime-refresh timer outlive a removed panel, so a
+    // re-paste must remove them to avoid leaks/duplicate timers.
+    let dragMove = null, dragUp = null;
+
     // Draggable: grab the title bar, move the whole panel. Position persists
     // across the page reloads that batching requires (localStorage.wlcPos).
     (function makeDraggable() {
@@ -557,7 +575,7 @@
         document.body.style.userSelect = 'none';
         e.preventDefault();
       });
-      window.addEventListener('mousemove', (e) => {
+      dragMove = (e) => {
         if (!dragging) return;
         const w = panel.getBoundingClientRect().width;
         const left = clamp(e.clientX - offX, 0, innerWidth - w);
@@ -566,14 +584,16 @@
         panel.style.top = top + 'px';
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
-      });
-      window.addEventListener('mouseup', () => {
+      };
+      window.addEventListener('mousemove', dragMove);
+      dragUp = () => {
         if (!dragging) return;
         dragging = false;
         document.body.style.userSelect = '';
         const r = panel.getBoundingClientRect();
         savePos({ left: Math.round(r.left), top: Math.round(r.top) });
-      });
+      };
+      window.addEventListener('mouseup', dragUp);
       // Double-click the title bar snaps it back to the default corner.
       bar.addEventListener('dblclick', () => {
         panel.style.left = 'auto';
@@ -713,14 +733,26 @@
       if (confirm('Reset the lifetime-removed counter to 0?')) { lifetime.reset(); refreshLife(); }
     };
 
-    setInterval(refreshLife, 1500);
+    const lifeTimer = setInterval(refreshLife, 1500);
+
+    // Teardown handle read by the single-injection guard on a re-paste: remove
+    // the window-level drag listeners and stop the refresh timer this panel owns
+    // (there is no id'd <style> tag — all styles are inline cssText — so none to
+    // remove). Stashed on the node so a later, separate execution can find it.
+    panel._wlcCleanup = () => {
+      try { if (dragMove) window.removeEventListener('mousemove', dragMove); } catch (e) {}
+      try { if (dragUp) window.removeEventListener('mouseup', dragUp); } catch (e) {}
+      try { clearInterval(lifeTimer); } catch (e) {}
+    };
   }
 
   // YouTube is a single-page app; (re)build the panel on playlist pages.
-  function maybeBuild() {
-    if (location.pathname === '/playlist') buildPanel();
+  // replace=true (fresh execution/bootstrap) tears down a stale panel from a
+  // prior console paste; replace=false (SPA navigation) keeps the existing one.
+  function maybeBuild(replace) {
+    if (location.pathname === '/playlist') buildPanel(replace);
   }
-  maybeBuild();
-  window.addEventListener('yt-navigate-finish', maybeBuild);
-  setTimeout(maybeBuild, 2000);
+  maybeBuild(true);
+  window.addEventListener('yt-navigate-finish', () => maybeBuild(false));
+  setTimeout(() => maybeBuild(false), 2000);
 })();
