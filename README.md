@@ -84,6 +84,11 @@ python youtube_cleaner.py sort --source PLxxxxxxxx
 # Review first: write the FULL proposed plan to a file you can read/edit
 python youtube_cleaner.py sort --source PLxxxxxxxx --json plan.json
 
+# Or review point-and-click: write an OFFLINE interactive HTML page, open it in a
+# browser, fix any wrong targets via dropdowns, then Download corrected plan.json
+python youtube_cleaner.py sort --source PLxxxxxxxx --html plan.html
+python youtube_cleaner.py apply --plan corrected-plan.json --execute
+
 # Actually move them (creates target playlists as needed)
 python youtube_cleaner.py sort --source PLxxxxxxxx --execute
 
@@ -158,6 +163,7 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 | `--execute`    | Actually move (asks you to type `MOVE` to confirm). Omit for a safe dry-run. |
 | `--max-moves`  | Safety cap per run (default 40, min 1). Each move costs ~100 quota units.   |
 | `--json PATH`  | Also write the **full** proposed plan (every video, not truncated) to a JSON file you can read, share, or **edit** before applying. |
+| `--html PATH`  | Also write a self-contained, **offline** interactive review page. Open it in a browser, reassign any wrong target with a dropdown (or "skip" / "＋ new playlist…"), then **Download corrected plan.json** and `apply` it. Runs client-side — nothing leaves your browser. |
 
 ---
 
@@ -177,6 +183,15 @@ it **suggests, you approve**. Nothing is ever moved silently.
    it is. Then run **`apply --plan plan.json --execute`**, which moves *exactly*
    what the file says (no re-classification — what you reviewed is what happens).
    Prefer to just run it? `sort --execute` classifies and moves in one step.
+
+   *Point-and-click instead of editing JSON:* add **`--html plan.html`** to
+   `sort` to also write an **offline** interactive review page. Open it in a
+   browser, reassign any video to another playlist with its dropdown (or pick
+   "skip" to leave it in the source, or "＋ new playlist…" to type a name), click
+   **Download corrected plan.json**, then `apply --plan corrected-plan.json
+   --execute`. The page is fully client-side (system fonts, no network requests)
+   so nothing about your library leaves your browser, and `apply` still moves
+   exactly what the file says — no re-classification.
 3. **Undo.** Every `--execute` run writes an **undo journal** to `history/`. If
    you don't like the result, **`undo --execute`** puts every moved video back in
    its original playlist. Run `undo` alone first for a dry-run preview.

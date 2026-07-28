@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import os
 import sys
@@ -1555,6 +1556,258 @@ def cmd_setup(args) -> None:
     print("Add --execute once the plan looks right.")
 
 
+def render_sort_html(source: dict, plan_by_target: dict[str, list[dict]],
+                     owned_titles, out_path: str) -> int:
+    """Write a self-contained, OFFLINE interactive review page for a sort plan.
+
+    ``plan_by_target`` is target -> list of item dicts (video_id, title, channel,
+    creates), the same per-item shape ``sort --json`` emits. The page lets the
+    user reassign any video via a dropdown and Download a corrected plan.json in
+    the exact schema ``apply``/``_load_plan`` reads. It makes ZERO network
+    requests (system fonts, inline CSS/JS) -- nothing leaves the browser.
+    """
+    owned = list(owned_titles)
+    owned_set = set(owned)
+    esc = lambda s: html.escape(s if s is not None else "")
+    esc_attr = lambda s: html.escape(s if s is not None else "", quote=True)
+
+    total = sum(len(v) for v in plan_by_target.values())
+    # Destination groups, largest first (mirrors the report's ordering).
+    groups = sorted(plan_by_target.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+    # Dropdown option set: every owned playlist title UNION every proposed target.
+    option_names = sorted(owned_set | set(plan_by_target.keys()), key=str.lower)
+
+    def options_html(selected: str) -> str:
+        opts = []
+        for name in option_names:
+            badge = "" if name in owned_set else "  (would create)"
+            sel = " selected" if name == selected else ""
+            opts.append(f'<option value="{esc_attr(name)}"{sel}>'
+                        f'{esc(name)}{esc(badge)}</option>')
+        opts.append('<option value="__skip__">\u2014 skip (leave in source) \u2014</option>')
+        opts.append('<option value="__new__">\uff0b new playlist\u2026</option>')
+        return "".join(opts)
+
+    # Summary rows (count per destination + would-create badge).
+    maxc = max((len(v) for v in plan_by_target.values()), default=1) or 1
+    summary_rows = []
+    for name, its in groups:
+        c = len(its)
+        badge = '<span class="new">would create</span>' if name not in owned_set else ""
+        pct = round(c / total * 100) if total else 0
+        barw = round(c / maxc * 100)
+        summary_rows.append(
+            f'<tr><td><b>{esc(name)}</b> {badge}</td>'
+            f'<td class="num">{c}</td><td class="num dim">{pct}%</td>'
+            f'<td><div class="bar"><div class="fill" style="width:{barw}%"></div></div></td></tr>'
+        )
+
+    # Collapsible per-destination sections; each row carries its own dropdown +
+    # a hidden "new name" input the "＋ new playlist…" option reveals.
+    sections = []
+    for gi, (name, its) in enumerate(groups):
+        open_attr = " open" if gi == 0 else ""
+        rows = []
+        for it in its:
+            vid = it.get("video_id", "")
+            title = it.get("title", "")
+            channel = it.get("channel", "")
+            rows.append(
+                f'<li class="vrow" data-video-id="{esc_attr(vid)}" '
+                f'data-title="{esc_attr(title)}" data-channel="{esc_attr(channel)}">'
+                f'<span class="t">{esc(title)}</span>'
+                f'<span class="ch">{esc(channel)}</span>'
+                f'<span class="pick"><select class="target" '
+                f'onchange="onPick(this)">{options_html(name)}</select>'
+                f'<input class="newname" type="text" placeholder="New playlist name" '
+                f'hidden></span></li>'
+            )
+        sections.append(
+            f'<details{open_attr}><summary><b>{esc(name)}</b>'
+            f'<span class="cnt">{len(its)}</span></summary>'
+            f'<ol class="vids">{"".join(rows)}</ol></details>'
+        )
+
+    # Embed the plan so the download rebuilds source.id/title verbatim. Escape the
+    # angle brackets/ampersand so a video title can't break out of <script>.
+    plan_json = json.dumps(
+        {"source": {"id": source.get("id", ""), "title": source.get("title", "")},
+         "total": total,
+         "by_target": plan_by_target},
+        ensure_ascii=False,
+    )
+    plan_json = (plan_json.replace("\\", "\\\\").replace("<", "\\u003c")
+                 .replace(">", "\\u003e").replace("&", "\\u0026"))
+    owned_json = json.dumps(owned, ensure_ascii=False)
+    owned_json = (owned_json.replace("\\", "\\\\").replace("<", "\\u003c")
+                  .replace(">", "\\u003e").replace("&", "\\u0026"))
+
+    src_title = esc(source.get("title", ""))
+    src_id = esc(source.get("id", ""))
+    would_create = sum(1 for n in plan_by_target if n not in owned_set)
+
+    page = f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sort Plan \u2014 Review &amp; Correct</title>
+<style>
+:root{{--bg:#f6f4ee;--surface:#fffdf8;--border:rgba(30,40,60,.14);--text:#1b2430;
+  --dim:#5c6672;--navy:#1e3a5f;--gold:#b8860b;--line:#e6e1d6;--ok:#0f8a5f;}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#12151b;--surface:#181c24;
+  --border:rgba(255,255,255,.10);--text:#e8e6df;--dim:#98a0ab;--navy:#7fb0e0;
+  --gold:#d4a73a;--line:#242a34;--ok:#3ecf8e;}}}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--text);line-height:1.5;
+  font-family:ui-serif,Georgia,'Times New Roman',serif;}}
+.mono{{font-family:ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace}}
+.wrap{{max-width:940px;margin:0 auto;padding:40px 24px 80px}}
+h1{{font-size:40px;line-height:1.08;margin:0 0 6px;font-weight:600}}
+.sub{{font-family:ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:.4px;
+  text-transform:uppercase;color:var(--dim);margin-bottom:10px}}
+.dry{{display:inline-block;font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  font-weight:700;color:var(--gold);border:1px solid var(--gold);border-radius:4px;
+  padding:2px 8px;margin-bottom:26px}}
+.banner{{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--ok);
+  border-radius:10px;padding:14px 18px;margin:0 0 26px;font-size:15px}}
+h2{{font-size:24px;margin:30px 0 12px;border-bottom:1px solid var(--line);padding-bottom:7px;font-weight:600}}
+table{{width:100%;border-collapse:collapse;background:var(--surface);
+  border:1px solid var(--border);border-radius:10px;overflow:hidden}}
+th,td{{padding:9px 13px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}}
+th{{font-family:ui-monospace,Consolas,monospace;font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--dim);font-weight:600}}
+tr:last-child td{{border-bottom:none}}
+td.num{{font-family:ui-monospace,Consolas,monospace;font-weight:700;text-align:right;width:60px}}
+.dim{{color:var(--dim)}}
+.bar{{background:var(--line);border-radius:6px;height:9px;width:100%;min-width:100px}}
+.fill{{height:9px;border-radius:6px;background:var(--navy)}}
+.new{{font-family:ui-monospace,Consolas,monospace;font-size:9px;font-weight:700;color:var(--gold);
+  border:1px solid var(--gold);border-radius:4px;padding:1px 5px;margin-left:6px}}
+.toolbar{{position:sticky;top:0;z-index:5;background:var(--bg);padding:14px 0;
+  border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center;flex-wrap:wrap}}
+button{{font:inherit;font-size:15px;cursor:pointer;border-radius:8px;padding:10px 18px;
+  border:1px solid var(--navy);background:var(--navy);color:#fff;font-weight:600}}
+button:hover{{opacity:.92}}
+.count{{font-family:ui-monospace,Consolas,monospace;font-size:13px;color:var(--dim)}}
+details{{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  margin:8px 0;padding:2px 4px}}
+summary{{cursor:pointer;padding:11px 13px;font-size:17px;list-style:none;display:flex;align-items:center}}
+summary::-webkit-details-marker{{display:none}}
+summary::before{{content:"+";font-family:ui-monospace,Consolas,monospace;color:var(--dim);
+  margin-right:11px;font-size:15px}}
+details[open] summary::before{{content:"\u2212"}}
+.cnt{{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--dim);margin-left:auto;
+  background:var(--line);border-radius:20px;padding:2px 10px}}
+ol.vids{{margin:0 6px 12px;padding:4px 0;list-style:none;border-top:1px solid var(--line)}}
+ol.vids li{{display:flex;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line);
+  font-size:14.5px;align-items:center;flex-wrap:wrap}}
+ol.vids li:last-child{{border-bottom:none}}
+.vrow .t{{flex:1;min-width:180px;overflow-wrap:anywhere}}
+.vrow .ch{{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--dim);
+  white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}}
+.vrow .pick{{display:flex;gap:6px;align-items:center}}
+select,.newname{{font:inherit;font-size:13px;padding:5px 7px;border-radius:6px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);max-width:210px}}
+.vrow.changed{{background:rgba(15,138,95,.08)}}
+.vrow.skip .t{{text-decoration:line-through;color:var(--dim)}}
+code.cmd{{display:block;font-family:ui-monospace,Consolas,monospace;font-size:13px;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:12px 14px;margin:10px 0;overflow-wrap:anywhere}}
+</style></head><body><div class="wrap">
+<h1>Sort Plan \u2014 Review &amp; Correct</h1>
+<div class="sub">Source: {src_title} &middot; {src_id}</div>
+<span class="dry">DRY-RUN \u2014 review page, no changes made</span>
+<div class="banner"><b>{total}</b> proposed move(s) into <b>{len(groups)}</b> destination(s)
+({would_create} would be created). Reassign any wrong pick with its dropdown, then
+<b>Download corrected plan.json</b>. This page runs <b>offline</b> \u2014 nothing leaves your browser.</div>
+
+<div class="toolbar">
+  <button id="dl" onclick="downloadPlan()">Download corrected plan.json</button>
+  <span class="count" id="tally"></span>
+</div>
+
+<h2>Destinations</h2>
+<table><thead><tr><th>Playlist</th><th class="num">Videos</th><th class="num">Share</th>
+<th style="width:38%">&nbsp;</th></tr></thead><tbody>{"".join(summary_rows)}</tbody></table>
+
+<h2>Videos (reassign any target)</h2>
+<p class="dim mono" style="font-size:12px">Grouped by proposed target. Each dropdown can send a
+video to ANY playlist, &ldquo;skip&rdquo; to leave it in the source, or &ldquo;\uff0b new playlist\u2026&rdquo; to type a name.</p>
+{"".join(sections)}
+
+<h2>Then apply it</h2>
+<p class="dim" style="font-size:14px">Run this against the file you just downloaded
+(add <span class="mono">--execute</span> once it looks right). It moves exactly what the
+file says \u2014 no re-classification.</p>
+<code class="cmd">python youtube_cleaner.py apply --plan corrected-plan.json --execute</code>
+
+<script>
+const PLAN = {plan_json};
+const OWNED = {owned_json};
+
+function onPick(sel) {{
+  const row = sel.closest('.vrow');
+  const newname = row.querySelector('.newname');
+  newname.hidden = (sel.value !== '__new__');
+  if (sel.value === '__new__') newname.focus();
+  row.classList.toggle('skip', sel.value === '__skip__');
+  refreshTally();
+}}
+
+function currentTarget(row) {{
+  const v = row.querySelector('select.target').value;
+  if (v === '__skip__') return null;
+  if (v === '__new__') {{
+    const name = (row.querySelector('.newname').value || '').trim();
+    return name || null;   // empty typed name -> treat as skip
+  }}
+  return v;
+}}
+
+function buildPlan() {{
+  const by_target = {{}};
+  document.querySelectorAll('.vrow').forEach(row => {{
+    const target = currentTarget(row);
+    if (!target) return;              // skipped rows are omitted entirely
+    (by_target[target] = by_target[target] || []).push({{
+      video_id: row.dataset.videoId,
+      title: row.dataset.title,
+      channel: row.dataset.channel,
+      creates: !OWNED.includes(target),
+    }});
+  }});
+  let total = 0;
+  Object.values(by_target).forEach(l => total += l.length);
+  return {{ source: PLAN.source, total, by_target }};
+}}
+
+function refreshTally() {{
+  const p = buildPlan();
+  const dests = Object.keys(p.by_target).length;
+  document.getElementById('tally').textContent =
+    p.total + ' move(s) into ' + dests + ' destination(s) \u00b7 ' +
+    (document.querySelectorAll('.vrow').length - p.total) + ' skipped';
+}}
+
+function downloadPlan() {{
+  const data = JSON.stringify(buildPlan(), null, 2);
+  const blob = new Blob([data], {{ type: 'application/json' }});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'corrected-plan.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}}
+
+refreshTally();
+</script>
+</div></body></html>"""
+
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(page)
+    return len(page)
+
+
 def cmd_sort(args) -> None:
     youtube = get_service()
     rules = load_rules()
@@ -1615,26 +1868,35 @@ def cmd_sort(args) -> None:
     for p in plan:
         by_target.setdefault(p["target"], []).append(p)
 
+    # Normalized plan (same per-item fields --json emits) reused by --json/--html.
+    norm_by_target = {
+        target: [
+            {
+                "video_id": p["video_id"],
+                "title": p["title"],
+                "channel": meta.get(p["video_id"], {}).get("channel", ""),
+                "creates": target not in title_to_id,
+            }
+            for p in items_
+        ]
+        for target, items_ in sorted(by_target.items())
+    }
+
     if getattr(args, "json", None):
         dump = {
             "source": {"id": args.source, "title": source["title"]},
             "total": len(plan),
-            "by_target": {
-                target: [
-                    {
-                        "video_id": p["video_id"],
-                        "title": p["title"],
-                        "channel": meta.get(p["video_id"], {}).get("channel", ""),
-                        "creates": target not in title_to_id,
-                    }
-                    for p in items_
-                ]
-                for target, items_ in sorted(by_target.items())
-            },
+            "by_target": norm_by_target,
         }
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(dump, fh, ensure_ascii=False, indent=2)
         print(f"Full plan written to {args.json}\n")
+
+    if getattr(args, "html", None):
+        render_sort_html({"id": args.source, "title": source["title"]},
+                         norm_by_target, list(title_to_id.keys()), args.html)
+        print(f"Interactive review page written to {args.html} \u2014 open it, fix "
+              "any targets, Download corrected plan.json, then `apply`.\n")
 
     print("Proposed moves:\n")
     for target in sorted(by_target):
@@ -2162,6 +2424,10 @@ def build_parser() -> argparse.ArgumentParser:
     srt.add_argument("--json", metavar="PATH", default=None,
                      help="Also write the full proposed plan (all videos, not truncated) "
                           "to this JSON file. Useful for review/reporting.")
+    srt.add_argument("--html", metavar="PATH", default=None,
+                     help="Also write a self-contained, offline interactive review page to "
+                          "this HTML file. Open it in a browser, reassign any wrong targets "
+                          "via dropdowns, Download corrected plan.json, then run `apply`.")
     srt.add_argument("--yes", action="store_true",
                      help="Skip the typed 'MOVE' confirmation (for non-interactive runs).")
 
