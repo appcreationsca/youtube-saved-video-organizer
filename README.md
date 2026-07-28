@@ -417,7 +417,12 @@ it on.
 2. In the panel (top-right), tick any combination of three independent modes and
    press **Start** (hit **Stop** anytime; adjust the delay if YouTube throttles you):
    - **Delete oldest videos** — the N oldest, in batches from the top (sort the
-     page "Date added (oldest)" first).
+     page "Date added (oldest)" first). **Safety guard (v2.8.0):** before an
+     oldest run the script reads YouTube's active sort — if it's positively a
+     **different** order (e.g. "Date added (newest)" / "Most popular") it
+     **blocks** and tells you to re-sort, since deleting from the top would
+     permanently remove the *wrong* videos (no undo). If it can't read the sort
+     control, it asks for an extra confirmation instead of trusting the order.
    - **Delete watched videos** — only those watched ≥ your % threshold (partials
      below it are kept). A one-click "Remove watched" shortcut is also provided.
    - **Delete private/deleted (unavailable) videos** — removes only rows titled
@@ -519,9 +524,12 @@ loss, but know them before relying on the tool unattended:
 **Watch Later userscript**
 - **Deletions are permanent — there is no undo.** Every mode is opt-in and
   confirmed, but once a row is removed it's gone.
-- **"Delete oldest" trusts the page's sort order.** It removes from the *top* of
-  the list, so it's only truly "oldest-first" if you set **"Date added (oldest)"**
-  first (the panel reminds you). With any other sort it removes whatever is on top.
+- **"Delete oldest" trusts the page's sort order — now guarded.** It removes from
+  the *top* of the list, so it's only truly "oldest-first" with **"Date added
+  (oldest)"** set. As of v2.8.0 the script reads the active sort and **blocks** the
+  run if it positively detects a different order (newest / most popular), or asks
+  for an extra confirmation if the sort control can't be read — so a wrong sort no
+  longer silently deletes the wrong (permanent, no-undo) videos.
 - **A row is counted as removed when the remove action succeeds**, not by
   re-confirming the row vanished; the loop re-scans each step, but a UI hiccup
   could in theory miscount. Watch the live counter and the list as it runs.

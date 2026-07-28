@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Watch Later & Playlist Cleaner (personal)
 // @namespace    https://github.com/your-name/yt-saved-organizer
-// @version      2.7.0
+// @version      2.8.0
 // @description  Bulk-remove videos from your YouTube "Watch Later" (or any open playlist) via the UI, oldest-first, in batches of 100, at 5,000+ scale. This is the ONLY way to clear Watch Later, since no official API can touch it.
 // @match        https://www.youtube.com/playlist?list=*
 // @grant        none
@@ -296,6 +296,47 @@
     return done;
   }
 
+  // H10 safety guard. The "delete oldest" sweep removes from the TOP of the list
+  // and TRUSTS that the page is sorted "Date added (oldest)". Watch Later /
+  // playlist removals are PERMANENT (no undo), so before an oldest run we read
+  // YouTube's currently-active sort label and classify it. Returns { state, label }:
+  //   'oldest'  -> the label positively says "oldest"  -> safe to proceed.
+  //   'other'   -> a recognized non-oldest sort (newest / most popular) -> BLOCK:
+  //                deleting from the top would remove the WRONG videos.
+  //   'unknown' -> the sort control couldn't be read    -> proceed only after an
+  //                extra explicit confirmation (never silently trust the order).
+  // Fail-safe by design: we only HARD-block when we positively read a wrong sort;
+  // if YouTube changes its DOM and we can't read it, we warn + require confirm
+  // rather than blocking every legitimate run.
+  function detectSortOrder() {
+    const readSel = [
+      'ytd-sort-filter-sub-menu-renderer #label',
+      'ytd-sort-filter-sub-menu-renderer .dropdown-trigger-text',
+      'ytd-sort-filter-sub-menu-renderer tp-yt-paper-button',
+      'yt-sort-filter-sub-menu-renderer #label',
+      '#sort-menu #label',
+      'yt-dropdown-menu #label',
+    ];
+    let label = '';
+    for (const s of readSel) {
+      const el = document.querySelector(s);
+      const t = ((el && el.textContent) || '').trim();
+      if (t) { label = t; break; }
+    }
+    if (!label) {
+      // Fallback: any short visible control whose text is a known sort option.
+      const cand = Array.from(document.querySelectorAll(
+        'tp-yt-paper-button, .dropdown-trigger-text, #label, yt-dropdown-menu, button'
+      )).map((e) => ((e.textContent) || '').trim())
+        .find((t) => t.length < 40 && /^(date added|date published|most popular)\b/i.test(t));
+      if (cand) label = cand;
+    }
+    if (!label) return { state: 'unknown', label: '' };
+    if (/oldest/i.test(label)) return { state: 'oldest', label };
+    if (/newest|most popular/i.test(label)) return { state: 'other', label };
+    return { state: 'unknown', label };
+  }
+
   // Open the playlist-level ⋮ (header) menu — NOT a video row's menu — and
   // return its menu items as an array. Returns null if the menu couldn't be
   // opened. Shared by removeWatchedNative and ensureUnavailableShown.
@@ -487,7 +528,7 @@
       kids: [
         el('span', 'display:flex;align-items:baseline;gap:8px;min-width:0', {
           kids: [
-            el('span', 'white-space:nowrap', { text: '\uD83E\uDDF9 Playlist Cleaner v2.7.0' }),
+            el('span', 'white-space:nowrap', { text: '\uD83E\uDDF9 Playlist Cleaner v2.8.0' }),
             el('span', 'font-size:11px;color:#69f0ae;font-weight:600;white-space:nowrap', { id: 'wlc-tbprog', text: '' }),
           ],
         }),
@@ -711,11 +752,33 @@
       if (!doOldest && !doWatched && !doUnavail) { status('Select at least one option.'); return; }
       if (doOldest && n <= 0) { status('Enter how many oldest videos to delete.'); return; }
 
+      // H10 guard: never delete "oldest" from an unverified sort order.
+      let sortWarn = '';
+      if (doOldest) {
+        const sort = detectSortOrder();
+        if (sort.state === 'other') {
+          alert(
+            'Blocked — the page is sorted "' + sort.label + '", NOT "Date added (oldest)".\n\n' +
+            'The "delete oldest" sweep removes videos from the TOP of the list. With this sort ' +
+            'it would permanently delete the WRONG videos, and there is no undo.\n\n' +
+            'Fix: set the playlist sort to "Date added (oldest)", then click Start again.\n' +
+            '(Untick "Delete oldest videos" if you only want the watched / unavailable sweeps.)'
+          );
+          status('Blocked: page is sorted "' + sort.label + '", not "Date added (oldest)". Re-sort, then Start.');
+          return;
+        }
+        if (sort.state === 'unknown') {
+          sortWarn = '  (\u26A0 Could NOT verify the sort is "Date added (oldest)". If it is not, ' +
+                     'this deletes the WRONG videos with no undo — confirm the sort manually first.)';
+        }
+      }
+
       const lines = ['This cannot be undone.', ''];
       if (doOldest) {
         const batches = Math.ceil(n / BATCH_SIZE);
         lines.push(`• Delete the ${n} OLDEST videos — ${batches} batch(es) of ${BATCH_SIZE}, from the top.`);
         lines.push('  (Make sure the page is sorted "Date added (oldest)".)');
+        if (sortWarn) lines.push(sortWarn);
         if (doWatched || doUnavail) {
           lines.push('  (The oldest sweep skips watched/unavailable rows — handled by their own passes below — so nothing is deleted twice and the totals add up.)');
         }
