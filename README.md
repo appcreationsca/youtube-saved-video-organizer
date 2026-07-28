@@ -375,7 +375,9 @@ web UI on your own machine.
    - **Delete private/deleted (unavailable) videos** — removes only rows titled
      `[Private video]` / `[Deleted video]`, the WL-side parity for the API's
      `remove-unavailable`. Rows whose title can't be read are **kept**, and this
-     sweep is separate and **not** counted against the oldest-N number. It matches
+     sweep is separate and **not** counted against the oldest-N number. YouTube
+     **hides** unavailable rows by default, so the script first auto-enables its
+     "Show unavailable videos" playlist option (you don't have to). It matches
      the **English** placeholder titles, so if your YouTube UI is in another
      language, switch it to English before running this sweep.
 

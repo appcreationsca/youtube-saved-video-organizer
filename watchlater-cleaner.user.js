@@ -262,11 +262,10 @@
     return done;
   }
 
-  // Preferred watched-video removal: trigger YouTube's own "Remove watched
-  // videos" playlist action (one shot, official, clears ALL watched, no
-  // scrolling). Returns true if the action was requested.
-  async function removeWatchedNative(delay, status) {
-    // Find the playlist-level ⋮ menu (header), NOT a video row's menu.
+  // Open the playlist-level ⋮ (header) menu — NOT a video row's menu — and
+  // return its menu items as an array. Returns null if the menu couldn't be
+  // opened. Shared by removeWatchedNative and ensureUnavailableShown.
+  async function openPlaylistHeaderMenu(delay) {
     let menuBtn = null;
     const header = document.querySelector(
       'ytd-playlist-header-renderer, ytd-playlist-header, ytd-page-header-renderer, .metadata-buttons-wrapper'
@@ -281,18 +280,27 @@
         .find((m) => !m.closest('ytd-playlist-video-renderer'));
       if (headerMenu) menuBtn = headerMenu.querySelector('button');
     }
-    if (!menuBtn) {
-      status('Could not open the playlist menu for "Remove watched videos".');
-      return false;
-    }
+    if (!menuBtn) return null;
 
     menuBtn.click();
     await sleep(delay + 200);
 
-    const items = document.querySelectorAll(
+    return Array.from(document.querySelectorAll(
       'ytd-menu-service-item-renderer, tp-yt-paper-item, yt-list-item-view-model'
-    );
-    const rw = Array.from(items).find((el) => /remove watched/i.test(el.textContent || ''));
+    ));
+  }
+
+  // Preferred watched-video removal: trigger YouTube's own "Remove watched
+  // videos" playlist action (one shot, official, clears ALL watched, no
+  // scrolling). Returns true if the action was requested.
+  async function removeWatchedNative(delay, status) {
+    const items = await openPlaylistHeaderMenu(delay);
+    if (!items) {
+      status('Could not open the playlist menu for "Remove watched videos".');
+      return false;
+    }
+
+    const rw = items.find((el) => /remove watched/i.test(el.textContent || ''));
     if (!rw) {
       document.body.click();
       status('No "Remove watched videos" item found (maybe none are watched).');
@@ -314,6 +322,42 @@
 
     status('Requested YouTube "Remove watched videos" — all watched cleared.');
     return true;
+  }
+
+  // YouTube HIDES unavailable ([Private video]/[Deleted video]) rows by default.
+  // The playlist ⋮ header menu toggles "Show unavailable videos" (when hidden)
+  // vs "Hide unavailable videos" (when shown). Before the unavailable sweep,
+  // open that menu and click "Show unavailable videos" if present, so the dead
+  // rows enter the DOM for isUnavailableRow() to find. Best-effort and safe:
+  // never throws; if the item is absent (already shown, or none to show) it just
+  // dismisses the menu and lets the sweep scan whatever is visible. Never clicks
+  // "Hide unavailable videos".
+  async function ensureUnavailableShown(delay, status) {
+    try {
+      const items = await openPlaylistHeaderMenu(delay);
+      if (!items) {
+        status('Could not open the playlist menu — scanning currently-visible rows only.');
+        return;
+      }
+      const show = items.find((el) => /show unavailable/i.test(el.textContent || ''));
+      if (!show) {
+        // Already shown (only "Hide unavailable videos" offered) or no such item.
+        document.body.click(); // dismiss the menu
+        return;
+      }
+      show.click();
+      // Wait for the newly-revealed rows to render: poll until the row count
+      // stops growing (2 stable reads) or a short timeout.
+      let prev = -1, stable = 0;
+      for (let i = 0; i < 20; i++) {
+        await sleep(Math.max(300, delay));
+        const n = videoRows().length;
+        if (n === prev) { if (++stable >= 2) break; } else { stable = 0; prev = n; }
+      }
+      status('Enabled YouTube\u2019s "Show unavailable videos".');
+    } catch (e) {
+      status('Could not enable "Show unavailable videos" — scanning currently-visible rows only.');
+    }
   }
 
   // Orchestrates the user's selection: oldest (batched) and/or watched and/or
@@ -338,6 +382,8 @@
       }
 
       if (doUnavailable && !stopRequested) {
+        status('Enabling "Show unavailable videos" (hidden by default)…');
+        await ensureUnavailableShown(delay, status);
         status('Now deleting private/deleted (unavailable) videos — separate, not counted…');
         unavailableDone = await removeLoop({ unavailableOnly: true, target: 0, delay, status, progress, batched: false });
       }
