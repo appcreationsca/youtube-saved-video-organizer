@@ -496,7 +496,7 @@
     panel.style.cssText = [
       'position:fixed', 'top:80px', 'right:20px', 'z-index:99999',
       'background:#212121', 'color:#fff', 'padding:14px', 'border-radius:10px',
-      'font:13px/1.4 Roboto, Arial, sans-serif', 'width:262px',
+      'font:13px/1.4 Roboto, Arial, sans-serif', 'width:300px',
       'box-shadow:0 4px 16px rgba(0,0,0,.5)',
     ].join(';');
 
@@ -526,13 +526,13 @@
       id: 'wlc-titlebar',
       attrs: { title: 'Drag to move \u00b7 double-click to reset position' },
       kids: [
-        el('span', 'display:flex;align-items:baseline;gap:8px;min-width:0', {
+        el('span', 'display:flex;align-items:baseline;gap:8px;min-width:0;flex:1 1 auto', {
           kids: [
-            el('span', 'white-space:nowrap', { text: '\uD83E\uDDF9 Playlist Cleaner v2.8.0' }),
-            el('span', 'font-size:11px;color:#69f0ae;font-weight:600;white-space:nowrap', { id: 'wlc-tbprog', text: '' }),
+            el('span', 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto', { text: '\uD83E\uDDF9 Playlist Cleaner v2.8.0' }),
+            el('span', 'font-size:11px;color:#69f0ae;font-weight:600;white-space:nowrap;flex:0 0 auto', { id: 'wlc-tbprog', text: '' }),
           ],
         }),
-        el('span', 'display:flex;align-items:center;gap:8px', {
+        el('span', 'display:flex;align-items:center;gap:8px;flex:0 0 auto', {
           kids: [
             el('span', 'color:#607d8b;font-size:13px;letter-spacing:1px', { text: '\u2807' }),
             el('button', 'cursor:pointer;background:#37474f;color:#cfd8dc;border:1px solid #555;border-radius:4px;width:22px;height:20px;font-size:14px;line-height:1;padding:0', {
