@@ -17,7 +17,8 @@
       "model": "llama3.1",
       "endpoint": "http://localhost:11434",
       "api_key_env": "OPENAI_API_KEY",
-      "batch_size": 50
+      "batch_size": 50,
+      "abstain": "normal"
     }
   },
 
@@ -35,7 +36,7 @@
     "create_missing": "true = create a mapped playlist the first time a video needs it (idempotent by name). false = skip videos whose target playlist doesn't exist yet, with a warning.",
     "unmatched": "'leave' (default) = leave videos that match nothing where they are. Or set a playlist name to collect them.",
     "category_map": "YouTube categoryId -> one of YOUR playlist names. Omit a category to skip it. Standard IDs: 1 Film & Animation, 2 Autos, 10 Music, 15 Pets, 17 Sports, 19 Travel & Events, 20 Gaming, 22 People & Blogs, 23 Comedy, 24 Entertainment, 25 News, 26 Howto & Style, 27 Education, 28 Science & Technology, 29 Nonprofits.",
-    "ai": "Tier 3, OFF by default. enabled=true turns it on. provider: ollama (free, local, no key) | openai | anthropic | gemini. model: the model name for that provider. endpoint: Ollama base URL (ollama only). api_key_env: NAME of the environment variable holding your API key (the key itself is NEVER stored here; it is read from the environment at runtime). Not needed for ollama. batch_size: how many videos to classify per request (default 50, 1-200). The classifier batches titles so it makes a few requests instead of one per video -- cheaper and much faster. Smaller = safer (bounded fallback, better accuracy on long lists); larger saves little extra.",
+    "ai": "Tier 3, OFF by default. enabled=true turns it on. provider: ollama (free, local, no key) | openai | anthropic | gemini. model: the model name for that provider. endpoint: Ollama base URL (ollama only). api_key_env: NAME of the environment variable holding your API key (the key itself is NEVER stored here; it is read from the environment at runtime). Not needed for ollama. batch_size: how many videos to classify per request (default 50, 1-200). The classifier batches titles so it makes a few requests instead of one per video -- cheaper and much faster. Smaller = safer (bounded fallback, better accuracy on long lists); larger saves little extra. abstain: recall vs precision knob -- 'high' only files on a clear match (fewest moves, most left in place), 'normal' files into the best-fitting playlist and leaves a video only when no playlist is a reasonable home (default), 'low' takes the best match unless the video is truly unrelated (most moves). Turn it up (toward 'high') if you see wrong guesses; turn it down (toward 'low') if too many videos are left unsorted.",
     "purge": "OPT-IN scheduled age-purge used by the `autopurge` command. OFF by default. enabled=true activates it. years: delete items older than this many WHOLE years. date_basis: 'added' (when saved to the playlist) or 'published' (upload date). playlists: EXACT titles of the playlists to purge -- only these are ever touched (autopurge never purges everything). protect: comma-separated titles to skip even if listed. daily_delete_budget: max deletes per run (~50 quota units each). Deletions are PERMANENT; dry-run first with `autopurge --playlist <id> --years N`."
   }
 }

@@ -14,6 +14,9 @@ rules.json
 # Generated artifacts (sort previews, plan dumps — contain your video titles)
 output/
 
+# Undo journals (record your moved video titles/ids — local safety net only)
+history/
+
 # Python
 venv/
 __pycache__/

@@ -81,8 +81,18 @@ python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2 --execute
 # DRY-RUN: sort videos out of a source playlist into topic playlists
 python youtube_cleaner.py sort --source PLxxxxxxxx
 
+# Review first: write the FULL proposed plan to a file you can read/edit
+python youtube_cleaner.py sort --source PLxxxxxxxx --json plan.json
+
 # Actually move them (creates target playlists as needed)
 python youtube_cleaner.py sort --source PLxxxxxxxx --execute
+
+# Fixed a wrong pick in plan.json? Apply the edited plan EXACTLY as written
+python youtube_cleaner.py apply --plan plan.json --execute
+
+# Changed your mind? Reverse the last sort/apply run (videos go back)
+python youtube_cleaner.py undo            # dry-run: shows what would be restored
+python youtube_cleaner.py undo --execute  # actually move them back
 
 # DRY-RUN: age-purge one playlist (older than 2 years) — no changes
 python youtube_cleaner.py autopurge --playlist PLxxxxxxxx --years 2
@@ -141,6 +151,77 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 | `--mode`       | Force one classifier layer for this run: `category`, `keyword`, `ai`, or `cascade` (default). Omit to use `config.json`. |
 | `--execute`    | Actually move (asks you to type `MOVE` to confirm). Omit for a safe dry-run. |
 | `--max-moves`  | Safety cap per run (default 40, min 1). Each move costs ~100 quota units.   |
+| `--json PATH`  | Also write the **full** proposed plan (every video, not truncated) to a JSON file you can read, share, or **edit** before applying. |
+
+---
+
+## Accuracy & the review workflow
+
+No automatic classifier is perfect — categories are subjective, and a few videos
+per batch will land somewhere you disagree with (in our own testing, ~90–95% of
+picks matched expectations). The design assumes this and puts **you** in control:
+it **suggests, you approve**. Nothing is ever moved silently.
+
+**The safe loop — review, correct, then approve:**
+
+1. **Preview.** `sort` is **dry-run by default**: it prints every proposed move
+   and changes nothing. Add `--json plan.json` to get the full, editable plan.
+2. **Correct (optional).** Open `plan.json` and fix any wrong picks — move a
+   video's entry under the right `target`, or delete its entry to leave it where
+   it is. Then run **`apply --plan plan.json --execute`**, which moves *exactly*
+   what the file says (no re-classification — what you reviewed is what happens).
+   Prefer to just run it? `sort --execute` classifies and moves in one step.
+3. **Undo.** Every `--execute` run writes an **undo journal** to `history/`. If
+   you don't like the result, **`undo --execute`** puts every moved video back in
+   its original playlist. Run `undo` alone first for a dry-run preview.
+
+**Why this is safe by construction:**
+
+- **Dry-run by default** on every write command (`sort`, `apply`, `undo`,
+  `clean`, `autopurge`) — you always see the plan before anything changes.
+- **Abstain on uncertainty.** When the AI isn't confident a video belongs in one
+  of *your* playlists, it leaves it in place rather than guess. Tune how eager it
+  is with `ai.abstain` (`high` / `normal` / `low` — see the config reference).
+- **Only your own playlists** are ever used as targets — it can't invent odd
+  categories.
+- **No data loss.** Moves are insert-before-delete, so an interrupted run (e.g.
+  quota) never drops a video, and `undo` fully reverses a completed run.
+- A wrong sort is **not destructive** — the video is just in a different
+  playlist, and one command moves it back.
+
+> **Known limitation:** if a run is interrupted in the split second *between*
+> adding a video to its target and removing it from the source (e.g. the daily
+> quota runs out at exactly that moment), the video can end up in **both**
+> playlists. Re-running `sort`/`apply` is safe and finishes the rest; just delete
+> the stray copy from the source if you spot one. A video is never *lost*.
+
+### `apply` options
+
+Executes a reviewed/edited plan file (from `sort --json`) deterministically.
+Idempotent: videos already moved are skipped, so it's safe to re-run if a run
+hits the daily quota.
+
+| Option        | Meaning                                                                  |
+|---------------|--------------------------------------------------------------------------|
+| `--plan PATH` | Plan JSON from `sort --json`, optionally edited to correct picks. **Required.** |
+| `--execute`   | Actually move (type `MOVE` to confirm). Omit for a safe dry-run.         |
+| `--max-moves` | Safety cap per run (default 40, min 1). ~100 quota units each.           |
+| `--yes`       | Skip the typed `MOVE` prompt (for scripts).                             |
+
+### `undo` options
+
+Reverses a previous `sort`/`apply` run from its journal — each video is moved
+back into the source playlist it came from. Idempotent and quota-capped.
+
+| Option       | Meaning                                                                   |
+|--------------|---------------------------------------------------------------------------|
+| `--file PATH`| Journal to reverse (default: the most recent run in `history/`).          |
+| `--execute`  | Actually move back (type `UNDO` to confirm). Omit for a safe dry-run.     |
+| `--max-moves`| Safety cap per run (default 40, min 1). ~100 quota units each.            |
+| `--yes`      | Skip the typed `UNDO` prompt (for scripts).                              |
+
+> Undo journals live in `history/` and contain your video titles/IDs, so they're
+> **git-ignored** and never leave your machine.
 
 ---
 
@@ -182,6 +263,7 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 | `ai.endpoint` | Ollama base URL (default `http://localhost:11434`). Ollama only. |
 | `ai.api_key_env` | **Name** of the env var holding your API key. The key is read from the environment at runtime and **never** stored in the file. |
 | `ai.batch_size` | Videos classified per request (default `50`, 1–200). AI batches titles so it makes a few requests instead of one per video — cheaper and much faster. Smaller = safer; larger saves little extra. |
+| `ai.abstain` | Recall vs precision knob: `high` (only files on a clear match — fewest moves), `normal` (best-fit; leaves a video only when no playlist is a reasonable home — **default**), `low` (takes the best match unless truly unrelated — most moves). Turn **up** if you see wrong guesses; turn **down** if too many videos are left unsorted. |
 
 ### Keyword rules (Tier 2) — map starter buckets to your playlists
 
@@ -229,6 +311,14 @@ layer for that run, and the cascade continues.
 `ai.batch_size`), classifying a whole playlist in a handful of requests instead of
 one call per video — much cheaper and faster. If a batch reply is malformed it
 falls back to per-video calls automatically, so a bad response never derails the run.
+
+**Tuning coverage (`ai.abstain`):** by default the AI files each video into its
+best-fitting playlist and leaves it alone only when no playlist is a reasonable home
+(`normal`). If it's guessing wrong, set `"abstain": "high"` so it moves only clear
+matches. If it's leaving too many videos unsorted — common when a playlist's name is
+broad but its existing examples are narrow, or when two playlists overlap — set
+`"abstain": "low"` to take the best match unless the video is truly unrelated. The
+active mode is printed at the start of every AI run (`[AI] recall mode: abstain=…`).
 
 ---
 
