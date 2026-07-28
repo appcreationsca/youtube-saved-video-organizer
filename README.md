@@ -384,11 +384,6 @@ step (so it doesn't act on stale elements). Each mode is opt-in, so nothing runs
 unless you tick it, and removals are permanent (there is no undo — a deleted or
 private video can't be restored).
 
-> **Language note:** the private/deleted sweep matches YouTube's **English**
-> placeholder titles (`[Private video]` / `[Deleted video]`). If your YouTube UI
-> is set to another language, switch it to English before running that sweep so
-> the rows are recognized.
-
 ---
 
 ## Notes & limits
