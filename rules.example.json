@@ -1,0 +1,48 @@
+{
+  "_comment": "GENERIC Tier-2 keyword example. Copy to rules.json and edit for YOUR playlists. Case-insensitive SUBSTRING match against 'title + channel'. FIRST matching rule wins, so ORDER = PRIORITY (put narrow/high-priority rules first). Rename 'playlist' to a name in YOUR account; a mapped playlist is created on first match if create_missing=true. Keep keywords long/distinctive to avoid false hits (bare 'ai' matches 'email', bare 'earn' matches 'learn', bare 'tour' matches 'tournament').",
+
+  "keyword_rules": [
+    {
+      "playlist": "Programming",
+      "any": ["python", "javascript", "typescript", "react", "node.js", "rust ", "golang", "leetcode", "algorithm", "data structure", "web development", "backend", "frontend", "docker", "kubernetes", "sql tutorial", "git tutorial"]
+    },
+    {
+      "playlist": "AI & ML",
+      "any": ["chatgpt", "chat gpt", "openai", "artificial intelligence", "machine learning", "deep learning", "neural network", "large language model", "llm", "midjourney", "stable diffusion", "generative ai", "prompt engineering", "langchain", "ai tools", "ai agent"]
+    },
+    {
+      "playlist": "Finance & Investing",
+      "any": ["stock market", "stocks", "dividend", "portfolio", "index fund", "etf", "investing", "investment", "personal finance", "budgeting", "bitcoin", "ethereum", "crypto", "blockchain", "retirement", "compound interest"]
+    },
+    {
+      "playlist": "Health & Fitness",
+      "any": ["workout", "gym", "fitness", "exercise", "weight loss", "bodybuilding", "yoga", "home workout", "protein", "diet plan", "healthy food", "health tips", "stretching", "meditation", "mobility"]
+    },
+    {
+      "playlist": "Travel",
+      "any": ["travel", "tourism", "tourist", "vacation", "road trip", "trip to", "backpack", "itinerary", "places to visit", "things to do in", "budget travel", "solo travel", "destination", "travel vlog"]
+    },
+    {
+      "playlist": "Cooking",
+      "any": ["recipe", "cooking", "how to cook", "street food", "food review", "baking", "dessert", "cake recipe", "meal prep", "kitchen", "one pot", "air fryer"]
+    },
+    {
+      "playlist": "Tech & Gadgets",
+      "any": ["smartphone", "iphone", "android phone", "laptop", "pc build", "gpu", "graphics card", "gadget", "unboxing", "tech review", "phone review", "earbuds", "headphone", "smartwatch"]
+    },
+    {
+      "playlist": "Gaming",
+      "any": ["gameplay", "walkthrough", "speedrun", "let's play", "lets play", "game review", "gaming", "minecraft", "fortnite", "valorant", "elden ring", "boss fight"]
+    },
+    {
+      "playlist": "Music",
+      "any": ["official music video", "lyric video", "lyrical", "audio song", "full song", "cover song", "live performance", "acoustic", "unplugged", "music video"]
+    }
+  ],
+
+  "_category_map_note": "Optional. Leave {} to rely purely on keyword_rules. If set, YouTube categoryId -> your playlist name is used as a fallback in cascade mode when no keyword matches.",
+  "category_map": {},
+
+  "_default_note": "null = leave unmatched videos where they are (recommended). Or set a playlist name to collect everything that matches no rule.",
+  "default_playlist": null
+}

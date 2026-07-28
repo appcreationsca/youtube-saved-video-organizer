@@ -1,0 +1,21 @@
+# Secrets & tokens — NEVER commit these
+client_secret.json
+token.json
+*.pickle
+
+# User-specific config written by `setup` (contains your playlist names)
+config.json
+
+# User-specific keyword rules (contain your playlist names/keywords).
+# Only rules.example.json is shipped as the template.
+rules.json
+*.backup.json
+
+# Generated artifacts (sort previews, plan dumps — contain your video titles)
+output/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
