@@ -366,12 +366,28 @@ web UI on your own machine.
 1. Install [Tampermonkey](https://tampermonkey.net/) or Violentmonkey.
 2. Add `watchlater-cleaner.user.js`.
 3. Open <https://www.youtube.com/playlist?list=WL> (or any playlist).
-4. In the panel (top-right): **Load all** → **Count** → **Remove watched only**
-   (safest) or **Remove ALL**. Adjust the delay if YouTube throttles you; hit
-   **Stop** anytime.
+4. In the panel (top-right), tick any combination of three independent modes and
+   press **Start** (hit **Stop** anytime; adjust the delay if YouTube throttles you):
+   - **Delete oldest videos** — the N oldest, in batches from the top (sort the
+     page "Date added (oldest)" first).
+   - **Delete watched videos** — only those watched ≥ your % threshold (partials
+     below it are kept). A one-click "Remove watched" shortcut is also provided.
+   - **Delete private/deleted (unavailable) videos** — removes only rows titled
+     `[Private video]` / `[Deleted video]`, the WL-side parity for the API's
+     `remove-unavailable`. Rows whose title can't be read are **kept**, and this
+     sweep is separate and **not** counted against the oldest-N number. It matches
+     the **English** placeholder titles, so if your YouTube UI is in another
+     language, switch it to English before running this sweep.
 
 It removes items one at a time at a human-like pace, re-scanning the list each
-step (so it doesn't act on stale elements), and can restrict to watched videos.
+step (so it doesn't act on stale elements). Each mode is opt-in, so nothing runs
+unless you tick it, and removals are permanent (there is no undo — a deleted or
+private video can't be restored).
+
+> **Language note:** the private/deleted sweep matches YouTube's **English**
+> placeholder titles (`[Private video]` / `[Deleted video]`). If your YouTube UI
+> is set to another language, switch it to English before running that sweep so
+> the rows are recognized.
 
 ---
 

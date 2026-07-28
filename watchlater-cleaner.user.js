@@ -104,6 +104,31 @@
     return 0;
   }
 
+  // Placeholder titles YouTube shows for rows whose underlying video is gone.
+  // Anchored full-match (bracket/whitespace tolerant) so ONLY a clear
+  // "[Private video]" / "[Deleted video]" / "[Unavailable video]" row matches —
+  // a normal video whose real title merely contains the word "deleted" never does.
+  const UNAVAILABLE_RE = /^\s*\[?\s*(private|deleted|unavailable)\s+video\s*\]?\s*$/i;
+
+  // A row's visible title, or '' when it can't be read.
+  function rowTitle(row) {
+    const el = row.querySelector('#video-title');
+    if (!el) return '';
+    return (el.textContent || el.getAttribute('title') || '').trim();
+  }
+
+  // True only for a clearly private/deleted/unavailable placeholder row.
+  // Safe-by-default: an unreadable title returns false, so the row is KEPT
+  // (never delete on uncertainty). The delete decision is the TITLE MATCH ONLY —
+  // the absent resume overlay (watchedPercent === -1) is corroboration for humans
+  // but is deliberately NOT used here, because a brand-new unwatched normal video
+  // also lacks that overlay.
+  function isUnavailableRow(row) {
+    const t = rowTitle(row);
+    if (!t) return false;
+    return UNAVAILABLE_RE.test(t);
+  }
+
   function scroller() {
     return document.scrollingElement || document.documentElement;
   }
@@ -154,7 +179,8 @@
   // Core remove loop. Returns the number removed this run.
   // - watchedOnly=false + target=N  -> delete N oldest (batched).
   // - watchedOnly=true  + target=0  -> delete all watched (fallback path).
-  async function removeLoop({ watchedOnly, watchedThreshold = 90, target, delay, status, progress, batched }) {
+  // - unavailableOnly=true + target=0 -> delete all private/deleted rows.
+  async function removeLoop({ watchedOnly, unavailableOnly = false, watchedThreshold = 90, target, delay, status, progress, batched }) {
     if (running) return 0;
     running = true;
 
@@ -167,7 +193,9 @@
 
     const report = (extra) => {
       const perMs = done > 0 ? (Date.now() - startedAt) / done : 0;
-      let msg = watchedOnly ? `Watched removed ${done}` : `Removed ${done}`;
+      let msg = unavailableOnly ? `Unavailable removed ${done}`
+        : watchedOnly ? `Watched removed ${done}`
+        : `Removed ${done}`;
       if (target) {
         const batch = done >= target ? totalBatches : Math.floor(done / BATCH_SIZE) + 1;
         const pct = Math.min(100, Math.round((done / target) * 100));
@@ -176,17 +204,21 @@
       msg += ` · lifetime ${lifetime.get()}`;
       if (extra) msg += ` · ${extra}`;
       status(msg);
-      if (progress) progress({ done, target, watchedOnly });
+      if (progress) progress({ done, target, watchedOnly, unavailableOnly });
     };
 
     while (!stopRequested) {
       if (target && done >= target) break;
 
-      const rows = videoRows().filter((r) => (watchedOnly ? watchedPercent(r) >= watchedThreshold : true));
+      const rows = videoRows().filter((r) =>
+        unavailableOnly ? isUnavailableRow(r)
+        : watchedOnly ? watchedPercent(r) >= watchedThreshold
+        : true);
 
       if (rows.length === 0) {
-        if (watchedOnly && videoRows().length >= MAX_SCAN) {
-          status(`Scanned ${videoRows().length} rows; removed ${done} watched \u2265${watchedThreshold}% this pass. Reload the page and Start again to continue (progress saved, lifetime ${lifetime.get()}).`);
+        if ((watchedOnly || unavailableOnly) && videoRows().length >= MAX_SCAN) {
+          const kind = unavailableOnly ? 'private/deleted' : `watched \u2265${watchedThreshold}%`;
+          status(`Scanned ${videoRows().length} rows; removed ${done} ${kind} this pass. Reload the page and Start again to continue (progress saved, lifetime ${lifetime.get()}).`);
           break;
         }
         report('loading more…');
@@ -284,14 +316,16 @@
     return true;
   }
 
-  // Orchestrates the user's selection: oldest (batched) and/or watched (separate).
-  async function runSelected({ doOldest, oldestCount, doWatched, watchedThreshold, delay, status, progress }) {
+  // Orchestrates the user's selection: oldest (batched) and/or watched and/or
+  // unavailable (each a separate, uncounted sweep).
+  async function runSelected({ doOldest, oldestCount, doWatched, watchedThreshold, doUnavailable, delay, status, progress }) {
     if (orchestrating) return;
     orchestrating = true;
     stopRequested = false;
 
     let oldestDone = 0;
     let watchedDone = 0;
+    let unavailableDone = 0;
     try {
       if (doOldest && oldestCount > 0) {
         status(`Deleting ${oldestCount} oldest in batches of ${BATCH_SIZE}…`);
@@ -302,6 +336,11 @@
         status(`Now deleting watched videos (only \u2265${watchedThreshold}% watched) — separate, not counted…`);
         watchedDone = await removeLoop({ watchedOnly: true, watchedThreshold, target: 0, delay, status, progress, batched: false });
       }
+
+      if (doUnavailable && !stopRequested) {
+        status('Now deleting private/deleted (unavailable) videos — separate, not counted…');
+        unavailableDone = await removeLoop({ unavailableOnly: true, target: 0, delay, status, progress, batched: false });
+      }
     } finally {
       orchestrating = false;
     }
@@ -309,6 +348,7 @@
     const bits = [];
     if (doOldest) bits.push(`${oldestDone} oldest`);
     if (doWatched) bits.push(`${watchedDone} watched (\u2265${watchedThreshold}%)`);
+    if (doUnavailable) bits.push(`${unavailableDone} unavailable`);
     status(`All done — ${bits.join(' + ') || 'nothing selected'}. ${stopRequested ? '(stopped) ' : ''}Lifetime: ${lifetime.get()}.`);
   }
 
@@ -403,6 +443,18 @@
           kids: ['Separate action \u2014 ', b('NOT'), ' counted above. Reads each video\u2019s progress bar; partials below your % are ', b('kept'), '.'],
         }),
         nativeBtn,
+      ],
+    }));
+
+    const optUnavail = el('input', '', { id: 'wlc-opt-unavail', type: 'checkbox' });
+    panel.appendChild(el('div', 'border:1px solid #444;border-radius:7px;padding:8px;margin-bottom:10px', {
+      kids: [
+        el('label', 'display:flex;align-items:center;gap:7px;cursor:pointer', {
+          kids: [optUnavail, el('span', 'font-weight:600', { text: 'Delete private/deleted (unavailable) videos' })],
+        }),
+        el('div', 'font-size:10.5px;color:#90a4ae;margin:4px 0 0 22px', {
+          kids: ['Removes only rows titled ', b('[Private video]'), ' / ', b('[Deleted video]'), '. Separate action, ', b('NOT'), ' counted above. Unreadable rows are ', b('kept'), '.'],
+        }),
       ],
     }));
 
@@ -510,7 +562,8 @@
     const prog = (p) => {
       const t = $('#wlc-tbprog');
       if (!t || !p || p.done == null) { if (t) t.textContent = ''; return; }
-      if (p.watchedOnly) t.textContent = `\u25B6 watched ${p.done}`;
+      if (p.unavailableOnly) t.textContent = `\u25B6 unavailable ${p.done}`;
+      else if (p.watchedOnly) t.textContent = `\u25B6 watched ${p.done}`;
       else if (p.target) t.textContent = `\u25B6 ${p.done}/${p.target} \u00b7 ${Math.min(100, Math.round((p.done / p.target) * 100))}%`;
       else t.textContent = `\u25B6 ${p.done}`;
     };
@@ -551,10 +604,11 @@
     $('#wlc-start').onclick = () => {
       const doOldest = $('#wlc-opt-oldest').checked;
       const doWatched = $('#wlc-opt-watched').checked;
+      const doUnavail = $('#wlc-opt-unavail').checked;
       const n = oldestCount();
       const thr = watchedThreshold();
 
-      if (!doOldest && !doWatched) { status('Select at least one option.'); return; }
+      if (!doOldest && !doWatched && !doUnavail) { status('Select at least one option.'); return; }
       if (doOldest && n <= 0) { status('Enter how many oldest videos to delete.'); return; }
 
       const lines = ['This cannot be undone.', ''];
@@ -566,11 +620,14 @@
       if (doWatched) {
         lines.push(`• Delete WATCHED videos (only those watched ≥ ${thr}%) — separate action, NOT counted in the ${doOldest ? n : 'oldest'} number.`);
       }
+      if (doUnavail) {
+        lines.push('• Delete PRIVATE/DELETED (unavailable) videos — only rows titled "[Private video]" / "[Deleted video]". Separate action, NOT counted above.');
+      }
       lines.push('', 'Proceed?');
 
       if (confirm(lines.join('\n'))) {
         $('#wlc-tbprog').textContent = '\u25B6 starting\u2026';
-        runSelected({ doOldest, oldestCount: n, doWatched, watchedThreshold: thr, delay: delay(), status, progress: prog })
+        runSelected({ doOldest, oldestCount: n, doWatched, watchedThreshold: thr, doUnavailable: doUnavail, delay: delay(), status, progress: prog })
           .then(() => { $('#wlc-tbprog').textContent = stopRequested ? '\u23F9 stopped' : '\u2713 done'; });
       }
     };
