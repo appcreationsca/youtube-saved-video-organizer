@@ -486,6 +486,45 @@ step is a **safe no-op** until you add an enabled `purge` block to `config.json`
 so existing setups are unaffected. Re-run `auth` if a run logs an auth error
 (testing-mode tokens expire ~weekly).
 
+> **This app never creates a schedule for you.** Nothing here registers a cron
+> job or Windows Scheduled Task automatically — you wire `daily_sort.ps1` into
+> one yourself if you want it. So there's no hidden background process to worry
+> about.
+
+### Turning it off / stopping age-purge
+
+`manage_schedule.ps1` gives you one place to inspect and stop the daily job, on
+Windows. It does two **independent** things so you can turn off exactly what you
+want:
+
+```powershell
+# See what's active right now (task state + whether age-purge is on):
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 status
+
+# OPTION 1 - stop only the permanent age-purge DELETES (keeps sort running):
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 disable-purge
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 enable-purge   # re-enable
+
+# OPTION 2 - stop the WHOLE daily job (sort + purge + dead-video cleanup):
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 pause-task      # reversible
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 resume-task
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 remove-task     # permanent (add -Force to skip the prompt)
+```
+
+- **`disable-purge`** flips `purge.enabled` to `false` in `config.json` (if there's
+  no purge config it's already off, so it just tells you so). `autopurge` then
+  deletes nothing, but the daily task still sorts and clears dead videos.
+- **`pause-task` / `remove-task`** disable or delete the `YouTube Daily Sort`
+  Scheduled Task, stopping *everything* the daily job does.
+- **Belt-and-suspenders:** run `disable-purge` **and** `pause-task` so no delete can
+  happen even if you forget one. The task name is `YouTube Daily Sort` by default;
+  pass `-TaskName '<name>'` if you named yours differently.
+- There is **no state/cursor file** to clean up — purge is stateless, so once the
+  task is paused/removed it's fully stopped, with nothing lingering. Already-deleted
+  videos stay deleted (no undo), and your `config.json` / OAuth `token.json` are left
+  untouched. To also revoke the app's access to your account, remove it at
+  <https://myaccount.google.com/permissions> and delete `token.json`.
+
 ---
 
 ## Known limitations & edge cases
