@@ -491,6 +491,43 @@ so existing setups are unaffected. Re-run `auth` if a run logs an auth error
 > one yourself if you want it. So there's no hidden background process to worry
 > about.
 
+#### Set it up (you create it — opt-in, "configure and forget")
+
+First do the prerequisites: run `python youtube_cleaner.py auth` once, and edit
+`daily_sort.ps1` to set `$SOURCES` to your source playlist IDs. Then create the
+daily task with **one command**:
+
+```powershell
+# Create the daily task (prompts before replacing an existing one):
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 install-task -Time 12:30
+
+# Check it, then forget it:
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 status
+
+# When you're done, delete it:
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 remove-task
+```
+
+`install-task` registers a task named `YouTube Daily Sort` that runs `daily_sort.ps1`
+daily at `-Time` (24h `HH:mm`, default `12:30`), **only while you're logged in** (no
+stored password, no admin needed). Pass `-TaskName '<name>'` to use your own name.
+
+**Prefer clicking?** Create it by hand instead: open **Task Scheduler → Create Basic
+Task…** → name it → trigger **Daily** at your time → action **Start a program** →
+program `powershell.exe`, arguments
+`-NoProfile -ExecutionPolicy Bypass -File "<full path>\daily_sort.ps1"`.
+
+**On Mac/Linux** (the CLI is cross-platform; the `.ps1` helpers are Windows-only) add a
+cron line — e.g. daily at 12:30 running `autopurge` + `sort` directly:
+```cron
+30 12 * * *  cd /path/to/youtube-prototype && ./venv/bin/python youtube_cleaner.py autopurge --execute --yes >> output/cron.log 2>&1
+```
+
+> **Remember to delete it when you're done.** A schedule is only worth keeping while
+> you have an ongoing backlog to chip away at. Once your playlists are trimmed and
+> sorted, run `manage_schedule.ps1 remove-task` (or delete the cron line) so nothing
+> keeps running. Removal is clean — purge is stateless, so there's nothing left behind.
+
 ### Turning it off / stopping age-purge
 
 `manage_schedule.ps1` gives you one place to inspect and stop the daily job, on
@@ -500,6 +537,9 @@ want:
 ```powershell
 # See what's active right now (task state + whether age-purge is on):
 powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 status
+
+# Create the daily task (see "Set it up" above for prerequisites):
+powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 install-task -Time 12:30
 
 # OPTION 1 - stop only the permanent age-purge DELETES (keeps sort running):
 powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 disable-purge

@@ -16,6 +16,7 @@
 
   Usage:
     powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 status
+    powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 install-task -Time 12:30
     powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 disable-purge
     powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 enable-purge
     powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 pause-task
@@ -27,9 +28,10 @@
     .\manage_schedule.ps1 pause-task      # the daily job can't fire at all
 #>
 param(
-  [ValidateSet('status','disable-purge','enable-purge','pause-task','resume-task','remove-task')]
+  [ValidateSet('status','install-task','disable-purge','enable-purge','pause-task','resume-task','remove-task')]
   [string]$Action = 'status',
   [string]$TaskName = 'YouTube Daily Sort',
+  [string]$Time = '12:30',
   [switch]$Force
 )
 
@@ -113,6 +115,45 @@ function Require-Task {
 switch ($Action) {
 
   'status'        { Show-Status }
+
+  'install-task' {
+    $scriptPath = Join-Path $here 'daily_sort.ps1'
+    if (-not (Test-Path $scriptPath)) {
+      Write-Warning "daily_sort.ps1 not found next to this script ($scriptPath). Cannot create the task."
+      break
+    }
+    try { $at = [datetime]::Parse($Time) }
+    catch { Write-Warning "Could not parse -Time '$Time'. Use 24h HH:mm, e.g. -Time 12:30 or -Time 02:00."; break }
+
+    $existing = Get-Task
+    if ($existing -and -not $Force) {
+      $ans = Read-Host ("A task named '{0}' already exists. Replace it? Type YES to overwrite" -f $TaskName)
+      if ($ans -ne 'YES') { Write-Host 'Aborted - existing task left in place.'; break }
+    }
+
+    # Warn (don't block) if the template still has no source playlists set.
+    $srcSet = Select-String -Path $scriptPath -Pattern '^\s*"[A-Za-z0-9_-]{10,}"\s*,' -Quiet
+    if (-not $srcSet) {
+      Write-Warning "daily_sort.ps1 has no `$SOURCES set yet - the sort step will do nothing until you edit it."
+    }
+
+    $me       = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
+                  -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scriptPath) `
+                  -WorkingDirectory $here
+    $trigger  = New-ScheduledTaskTrigger -Daily -At $at
+    $principal= New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+    $desc     = "Daily YouTube maintenance (remove-unavailable + opt-in age-purge + sort) via daily_sort.ps1. User-created; delete with: manage_schedule.ps1 remove-task"
+
+    Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Trigger $trigger `
+      -Principal $principal -Settings $settings -Description $desc -Force | Out-Null
+
+    Write-Host ("Created scheduled task '{0}' - runs daily at {1} (only while you're logged in)." -f $TaskName, $at.ToString('HH:mm')) -ForegroundColor Green
+    Write-Host "It runs: remove-unavailable + autopurge (no-op until you enable purge) + sort."
+    Write-Host "Reminder: when you're done, delete it with  .\manage_schedule.ps1 remove-task" -ForegroundColor Yellow
+    Write-Host "First, make sure you've run 'python youtube_cleaner.py auth' and set `$SOURCES in daily_sort.ps1."
+  }
 
   'disable-purge' { Set-PurgeEnabled $false }
 
