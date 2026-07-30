@@ -34,7 +34,7 @@ sent to us — auth happens directly between your machine and Google.
 
 1. Go to <https://console.cloud.google.com/> and create a **new project**.
 2. **APIs & Services → Library** → search **"YouTube Data API v3"** → **Enable**.
-3. **APIs & Services → OAuth consent screen**:
+3. **APIs & Services → OAuth consent screen → Audience** :
    - User type: **External**
    - Fill in app name + your email, save through the steps.
    - **Test users:** add the Google account(s) you'll use. While the app is in
