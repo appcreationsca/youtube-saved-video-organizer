@@ -1,6 +1,6 @@
-# YouTube Saved-Video Organizer — Prototype
+# YouTube Saved-Video Organizer
 
-A safety-first prototype with **two parts**, because YouTube's API can do most of
+A safety-first app with **two parts**, because YouTube's API can do most of
 the job but physically cannot touch Watch Later:
 
 ### Part 1 — `youtube_cleaner.py` (compliant, official YouTube Data API v3)
@@ -43,7 +43,7 @@ sent to us — auth happens directly between your machine and Google.
    - Application type: **Desktop app**
    - Create, then **Download JSON**.
 5. Rename the downloaded file to **`client_secret.json`** and place it in this
-   `youtube-prototype/` folder (next to `youtube_cleaner.py`).
+   `youtube-saved-video-organizer/` folder (next to `youtube_cleaner.py`).
 
 > `client_secret.json` and `token.json` are git-ignored. Never share them.
 
@@ -52,7 +52,7 @@ sent to us — auth happens directly between your machine and Google.
 ## 2. Install
 
 ```powershell
-cd youtube-prototype
+cd youtube-saved-video-organizer
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -520,7 +520,7 @@ program `powershell.exe`, arguments
 **On Mac/Linux** (the CLI is cross-platform; the `.ps1` helpers are Windows-only) add a
 cron line — e.g. daily at 12:30 running `autopurge` + `sort` directly:
 ```cron
-30 12 * * *  cd /path/to/youtube-prototype && ./venv/bin/python youtube_cleaner.py autopurge --execute --yes >> output/cron.log 2>&1
+30 12 * * *  cd /path/to/youtube-saved-video-organizer && ./venv/bin/python youtube_cleaner.py autopurge --execute --yes >> output/cron.log 2>&1
 ```
 
 > **Remember to delete it when you're done.** A schedule is only worth keeping while
@@ -569,7 +569,7 @@ powershell -ExecutionPolicy Bypass -File .\manage_schedule.ps1 remove-task     #
 
 ## Known limitations & edge cases
 
-These are deliberate simplifications in this prototype. None cause silent data
+These are deliberate simplifications in this app. None cause silent data
 loss, but know them before relying on the tool unattended:
 
 **Undo & journaling**
