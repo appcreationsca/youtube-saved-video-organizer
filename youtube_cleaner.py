@@ -1666,7 +1666,7 @@ def render_sort_html(source: dict, plan_by_target: dict[str, list[dict]],
                 f'<span class="pick"><select class="target" '
                 f'onchange="onPick(this)">{options_html(name)}</select>'
                 f'<input class="newname" type="text" placeholder="New playlist name" '
-                f'hidden></span></li>'
+                f'oninput="refreshTally()" hidden></span></li>'
             )
         sections.append(
             f'<details{open_attr}><summary><b>{esc(name)}</b>'
@@ -1779,7 +1779,7 @@ code.cmd{{display:block;font-family:ui-monospace,Consolas,monospace;font-size:13
 
 <h2>Destinations</h2>
 <table><thead><tr><th>Playlist</th><th class="num">Videos</th><th class="num">Share</th>
-<th style="width:38%">&nbsp;</th></tr></thead><tbody>{"".join(summary_rows)}</tbody></table>
+<th style="width:38%">&nbsp;</th></tr></thead><tbody id="destBody">{"".join(summary_rows)}</tbody></table>
 
 <h2>Videos (reassign any target)</h2>
 <p class="dim mono" style="font-size:12px">Grouped by proposed target. Each dropdown can send a
@@ -1838,6 +1838,35 @@ function refreshTally() {{
   document.getElementById('tally').textContent =
     p.total + ' move(s) into ' + dests + ' destination(s) \u00b7 ' +
     (document.querySelectorAll('.vrow').length - p.total) + ' skipped';
+  renderDestinations(p);
+}}
+
+// Escape for safe innerHTML (playlist names can contain <, &, quotes, and a
+// user-typed new name is arbitrary text).
+function escapeHtml(s) {{
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}}
+
+// Rebuild the Destinations table from the CURRENT picks so it stays in sync with
+// the dropdowns / typed new-playlist names (mirrors the server-side summary_rows).
+function renderDestinations(p) {{
+  const entries = Object.entries(p.by_target);
+  entries.sort((a, b) => b[1].length - a[1].length);   // largest first
+  const total = p.total || 0;
+  let maxc = 1;
+  entries.forEach(e => {{ if (e[1].length > maxc) maxc = e[1].length; }});
+  const rows = entries.map(e => {{
+    const name = e[0], c = e[1].length;
+    const badge = OWNED.includes(name) ? '' : '<span class="new">would create</span>';
+    const pct = total ? Math.round(c / total * 100) : 0;
+    const barw = Math.round(c / maxc * 100);
+    return '<tr><td><b>' + escapeHtml(name) + '</b> ' + badge + '</td>' +
+      '<td class="num">' + c + '</td><td class="num dim">' + pct + '%</td>' +
+      '<td><div class="bar"><div class="fill" style="width:' + barw + '%"></div></div></td></tr>';
+  }});
+  document.getElementById('destBody').innerHTML = rows.join('') ||
+    '<tr><td class="dim" colspan="4">No destinations \u2014 every video skipped.</td></tr>';
 }}
 
 function downloadPlan() {{
