@@ -72,6 +72,7 @@ python youtube_cleaner.py playlists
 # Choose how videos get sorted (writes config.json). See "Classifier" below.
 python youtube_cleaner.py setup
 
+# Note: We need to provide the playlist id and not the playlist name
 # DRY-RUN: show what WOULD be deleted (older than 2 years) — no changes
 python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2
 
