@@ -396,7 +396,7 @@ web UI on your own machine.
   [Tampermonkey](https://tampermonkey.net/) or Violentmonkey and add
   `watchlater-cleaner.user.js`. It then loads automatically on every playlist page.
 - **One-time, no install:** open `watchlater-console.html` (generate it with
-  `node tools/build-console-page.js`), click **Copy script**, then on the Watch
+  `node tools/build-console-page.cjs`), click **Copy script**, then on the Watch
   Later page press <kbd>F12</kbd> → **Console**, type `allow pasting` + Enter the
   first time if prompted, paste, and press Enter. The panel appears just the same.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * build-console-page.js — generate the offline "console-paste" delivery page.
+ * build-console-page.cjs — generate the offline "console-paste" delivery page.
  *
  * WHY
  * ---
@@ -28,10 +28,17 @@
  * - The page makes ZERO network requests: a system-font stack, no CDN, no fonts,
  *   no analytics. Nothing leaves the browser.
  *
+ * WHY .cjs
+ * --------
+ * This file uses CommonJS (`require`). It is named `.cjs` so Node always treats
+ * it as CommonJS even if an ancestor `package.json` sets `"type": "module"`
+ * (which would otherwise make Node parse every `.js` as an ES module and throw
+ * "require is not defined in ES module scope").
+ *
  * USAGE
  * -----
- *   node tools/build-console-page.js
- *   node tools/build-console-page.js watchlater-cleaner.user.js watchlater-console.html
+ *   node tools/build-console-page.cjs
+ *   node tools/build-console-page.cjs watchlater-cleaner.user.js watchlater-console.html
  *
  * The generated HTML only contains the shipped script (no user data) but is a
  * build artifact, so it is .gitignored; run this to (re)create it.
