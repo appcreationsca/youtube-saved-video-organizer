@@ -72,6 +72,11 @@ python youtube_cleaner.py playlists
 # Choose how videos get sorted (writes config.json). See "Classifier" below.
 python youtube_cleaner.py setup
 
+# Prefer to map by eye? Scan a playlist's REAL videos, see which YouTube
+# categories they fall under (with sample titles), and map each category to one of
+# your playlists on an offline HTML page — then Download config.json. (Tier 0/1)
+python youtube_cleaner.py map --source PLxxxxxxxx --html category-map.html
+
 # Note: We need to provide the playlist id and not the playlist name
 # DRY-RUN: show what WOULD be deleted (older than 2 years) — no changes
 python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2
@@ -165,6 +170,18 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 | `--max-moves`  | Safety cap per run (default 40, min 1). Each move costs ~100 quota units.   |
 | `--json PATH`  | Also write the **full** proposed plan (every video, not truncated) to a JSON file you can read, share, or **edit** before applying. |
 | `--html PATH`  | Also write a self-contained, **offline** interactive review page. Open it in a browser, reassign any wrong target with a dropdown (or "skip" / "＋ new playlist…"), then **Download corrected plan.json** and `apply` it. Runs client-side — nothing leaves your browser. |
+
+### `map` options
+
+| Option        | Meaning                                                                     |
+|---------------|-----------------------------------------------------------------------------|
+| `--source`    | Playlist ID whose real videos are scanned and grouped by YouTube category. **Required.** |
+| `--html PATH` | Write the offline interactive category-map page (default `category-map.html`). Map each present category → your playlist, then **Download config.json**. |
+| `--json PATH` | Also dump the grouped scan (categories + video titles) to JSON. |
+
+Read-only — `map` never moves or deletes anything; it only writes the page/JSON. See
+**Category map** under the Classifier section for the full workflow.
+
 
 ---
 
@@ -294,7 +311,7 @@ video and the first hit wins. You never pick a tier per video.
 | Tier | Name | Setup | What it does |
 |------|------|-------|--------------|
 | **0** | Category (universal) | zero-config | Sorts by YouTube's own `categoryId` (Music, Gaming, Education…) into auto-named playlists. Works for anyone. |
-| **1** | Category → **my** playlists | `setup` → `[2]` | Maps each YouTube category to one of **your** existing playlist names. **Recommended.** |
+| **1** | Category → **my** playlists | `setup` → `[2]`, or `map` (visual) | Maps each YouTube category to one of **your** existing playlist names. **Recommended.** |
 | **2** | Keyword rules | `setup` → `[3]` (maps starter buckets to **your** playlists), then edit `rules.json` | Substring match on title + channel. See `rules.example.json`. Advanced/personal — see note below. |
 | **3** | AI classify | `setup` → `[4]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
 
@@ -324,6 +341,33 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 | `ai.api_key_env` | **Name** of the env var holding your API key. The key is read from the environment at runtime and **never** stored in the file. |
 | `ai.batch_size` | Videos classified per request (default `50`, 1–200). AI batches titles so it makes a few requests instead of one per video — cheaper and much faster. Smaller = safer; larger saves little extra. |
 | `ai.abstain` | Recall vs precision knob: `high` (only files on a clear match — fewest moves), `normal` (best-fit; leaves a video only when no playlist is a reasonable home — **default**), `low` (takes the best match unless truly unrelated — most moves). Turn **up** if you see wrong guesses; turn **down** if too many videos are left unsorted. |
+
+### Category map (`map` command) — map by eye, from your real videos
+
+`setup → [2]` maps YouTube categories to your playlists at a text prompt, but you may
+not know which of **your** saved videos actually fall under "Science & Technology" or
+"People & Blogs" — so the mapping is a guess. The `map` command removes that guesswork:
+
+```powershell
+python youtube_cleaner.py map --source PLxxxxxxxx --html category-map.html
+```
+
+It scans the **real videos** in `--source`, groups them by the category YouTube
+assigned each one, and writes a self-contained **offline** HTML page (same look as the
+`sort --html` review page). The page shows **only the categories present in your
+videos** — largest first, each with sample titles — and a dropdown per category to pick
+one of your playlists, type a new name, or skip. Click **Download config.json**, drop
+the file next to `youtube_cleaner.py`, then preview the sort:
+
+```powershell
+python youtube_cleaner.py sort --source PLxxxxxxxx --mode category
+```
+
+Notes: it lists **your** playlists as targets (the source is excluded); videos YouTube
+left un-categorized are counted but can't be mapped (no category to key on); the page
+runs client-side — nothing leaves your browser. Add `--json map.json` to also dump the
+grouped scan. This is Tier 0/1 — the map only sets `category_map`; keyword/AI layers are
+unaffected.
 
 ### Keyword rules (Tier 2) — map starter buckets to your playlists
 
@@ -360,12 +404,30 @@ layer for that run, and the cascade continues.
   the env var it names before running `sort`, e.g. in PowerShell:
 
   ```powershell
+  # Session only (this terminal): fast, disappears when you close the window
   $env:OPENAI_API_KEY = "sk-..."
+
+  # OR persist across terminals (setx writes it permanently, but only affects
+  # NEW terminals — reopen PowerShell after running this):
+  setx OPENAI_API_KEY "sk-..."
+
   python youtube_cleaner.py sort --source PLxxxxxxxx --mode ai
   ```
 
   Classifying titles is tiny (~500 videos ≈ a few cents). The key is never written
-  to disk by this tool.
+  to disk by this tool — only the env-var **name** goes in `config.json`.
+
+  > **"OPENAI_API_KEY is empty" but you set it?** `setx` doesn't affect the terminal
+  > it was run in — open a **new** one. And `$env:...` only lives in the one session
+  > that set it. As a convenience, when you run `sort` interactively with the key
+  > missing, the tool **prompts you to paste it once** (hidden input, kept in memory
+  > for that run only, never saved). Schedulers skip the prompt and just disable AI.
+
+**`sort` vs `sort --mode ai`:** plain `sort` runs the full **cascade** (keyword → AI →
+category), so AI is *already* used when it's enabled in `config.json` and nothing earlier
+matched. Use `--mode ai` only to force **AI-only** for a run (skip keyword + category) —
+handy for testing the model or re-classifying a playlist purely by AI.
+
 
 **Efficient by default:** the AI layer **batches** titles (50 per request via
 `ai.batch_size`), classifying a whole playlist in a handful of requests instead of

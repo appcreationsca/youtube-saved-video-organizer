@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import getpass
 import html
 import json
 import os
@@ -850,12 +851,32 @@ def build_ai_classifier(config: dict | None, playlists: list[dict],
     api_key = ""
     if provider != "ollama":
         key_env = ai_cfg.get("api_key_env") or ""
-        api_key = os.environ.get(key_env, "")
+        api_key = os.environ.get(key_env, "").strip()
         if not api_key:
-            print(f"  [AI] provider '{provider}' is enabled but env var "
-                  f"'{key_env}' is empty -- skipping AI layer. Set the key, or "
-                  "use provider 'ollama' (no key).")
-            return None
+            # The env var is empty. This is almost always operational: the key was
+            # exported in a DIFFERENT shell/session, or set with `setx` (which does
+            # not affect the already-open terminal), or the var name doesn't match
+            # `api_key_env`. Rather than fail, offer a one-time hidden prompt when a
+            # human is at the terminal so AI works without env-var fiddling. The key
+            # is used in memory for THIS run only and is never written to disk.
+            interactive = sys.stdin.isatty() and sys.stderr.isatty()
+            print(f"  [AI] env var '{key_env or '(none configured)'}' is empty "
+                  f"(the key must be set in THIS terminal session).")
+            if interactive:
+                try:
+                    api_key = getpass.getpass(
+                        f"  [AI] paste your {provider} API key for this run "
+                        "(input hidden, not stored; Enter to skip AI): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    api_key = ""
+            if not api_key:
+                print(f"  [AI] no key -- skipping AI layer. Set it persistently with:\n"
+                      f"         setx {key_env or 'OPENAI_API_KEY'} \"sk-...\"   "
+                      "(then open a NEW terminal)\n"
+                      f"       or for the current session only:\n"
+                      f"         $env:{key_env or 'OPENAI_API_KEY'}='sk-...'   (PowerShell)\n"
+                      "       or use provider 'ollama' (local, no key).")
+                return None
 
     # Candidate playlists = the user's own playlists, minus the source.
     candidates = [p for p in playlists
@@ -1560,7 +1581,10 @@ def cmd_setup(args) -> None:
 
     elif choice == "4":
         print("\nTier 3 (AI). The classifier reads each video's title and picks from")
-        print("YOUR playlists. AI stays OFF unless enabled here. Nothing is stored by us.\n")
+        print("YOUR playlists. AI stays OFF unless enabled here.")
+        print("  What IS saved to config.json: the provider, model, and the NAME of the")
+        print("  environment variable that holds your key (e.g. OPENAI_API_KEY).")
+        print("  What is NEVER saved: the API key itself and your video data.\n")
         provider = ""
         while provider not in {"ollama", "openai", "anthropic", "gemini"}:
             provider = _prompt("  Provider [ollama/openai/anthropic/gemini] "
@@ -1582,10 +1606,12 @@ def cmd_setup(args) -> None:
             key_env = _prompt(f"  Env var holding your API key [{key_env_default}]: ").strip() \
                 or key_env_default
             ai_block["api_key_env"] = key_env
-            have = "set" if os.environ.get(key_env) else "NOT set yet"
+            have = "set in this session" if os.environ.get(key_env) else "NOT set yet"
             print(f"\n  The key is read from ${key_env} at runtime ({have}); it is never")
-            print("  written to config.json. Set it before running sort, e.g.:")
-            print(f"    $env:{key_env}='sk-...'   (PowerShell)")
+            print("  written to config.json. Set it in the SAME terminal you run sort in:")
+            print(f"    $env:{key_env}='sk-...'          (PowerShell, this session only)")
+            print(f"    setx {key_env} \"sk-...\"          (persist; open a NEW terminal after)")
+            print("  If you skip this, sort will offer a one-time hidden prompt for the key.")
         cfg["ai"] = ai_block
         cfg["mode"] = "cascade"
         print("\nTier 3 enabled in cascade: keyword rules -> AI -> category -> leave.\n")
@@ -1599,6 +1625,13 @@ def cmd_setup(args) -> None:
     print("  python youtube_cleaner.py playlists          # find a source playlist ID")
     print("  python youtube_cleaner.py sort --source <PLAYLIST_ID>")
     print("Add --execute once the plan looks right.")
+    if choice == "4":
+        print("\nAI usage:")
+        print("  sort --source <ID>            # cascade: keyword -> AI -> category (AI IS used)")
+        print("  sort --source <ID> --mode ai  # force AI-only for this run")
+    if choice == "2":
+        print("\nTip: to map categories from your ACTUAL saved videos (with examples), try:")
+        print("  python youtube_cleaner.py map --source <PLAYLIST_ID> --html mapping.html")
 
 
 def render_sort_html(source: dict, plan_by_target: dict[str, list[dict]],
@@ -1886,6 +1919,319 @@ refreshTally();
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(page)
     return len(page)
+
+
+def fetch_category_names(youtube, region_code: str = "US") -> dict:
+    """Return {categoryId: human name} from the API (1 quota unit).
+
+    Falls back to the built-in STANDARD_CATEGORIES for any id the API doesn't
+    return (or if the call fails), so the map page always renders."""
+    names = dict(STANDARD_CATEGORIES)
+    try:
+        resp = (youtube.videoCategories()
+                .list(part="snippet", regionCode=region_code).execute())
+        for item in resp.get("items", []):
+            cid = item.get("id")
+            title = (item.get("snippet") or {}).get("title")
+            if cid and title:
+                names[cid] = title
+    except Exception:  # network/quota/region error -> keep the built-in names
+        pass
+    return names
+
+
+def render_map_html(source: dict, groups: dict[str, list[dict]],
+                    cat_names: dict, owned_titles, uncategorized: int,
+                    out_path: str) -> int:
+    """Write a self-contained, OFFLINE interactive category-mapping page.
+
+    ``groups`` is categoryId -> list of {video_id, title, channel} for the
+    videos ACTUALLY saved in the source playlist (only categories present in the
+    user's own videos appear). Each category card shows a count + example titles
+    and a dropdown to map it to one of the user's playlists (or a new name, or
+    skip). "Download config.json" builds classify.category_map in the exact shape
+    load_config() reads. Makes ZERO network requests (system fonts, inline CSS/JS).
+    """
+    owned = list(owned_titles)
+    owned_set = set(owned)
+    esc = lambda s: html.escape(s if s is not None else "")
+    esc_attr = lambda s: html.escape(s if s is not None else "", quote=True)
+
+    total = sum(len(v) for v in groups.values())
+    # Categories present in the user's videos, largest first.
+    cats_sorted = sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True)
+    owned_opts_sorted = sorted(owned_set, key=str.lower)
+
+    def options_html() -> str:
+        opts = ['<option value="__skip__" selected>\u2014 skip (leave in place) \u2014</option>']
+        for name in owned_opts_sorted:
+            opts.append(f'<option value="{esc_attr(name)}">{esc(name)}</option>')
+        opts.append('<option value="__new__">\uff0b new playlist\u2026</option>')
+        return "".join(opts)
+
+    SAMPLE_CAP = 15
+    cat_counts: dict[str, int] = {}
+    cards = []
+    for cid, vids in cats_sorted:
+        cat_counts[cid] = len(vids)
+        name = cat_names.get(str(cid)) or cat_names.get(cid) or f"Category {cid}"
+        rows = []
+        for v in vids[:SAMPLE_CAP]:
+            ch = (f' <span class="ch">{esc(v.get("channel",""))}</span>'
+                  if v.get("channel") else "")
+            rows.append(
+                f'<li><a href="https://www.youtube.com/watch?v='
+                f'{esc_attr(v.get("video_id",""))}" target="_blank" rel="noopener">'
+                f'{esc(v.get("title","(unknown)"))}</a>{ch}</li>')
+        more = (f'<li class="more">\u2026 and {len(vids) - SAMPLE_CAP} more</li>'
+                if len(vids) > SAMPLE_CAP else "")
+        cards.append(
+            f'<section class="cat" data-cat="{esc_attr(str(cid))}">'
+            f'<div class="cathead"><div class="catname">{esc(name)}'
+            f'<span class="cnt">{len(vids)}</span></div>'
+            f'<div class="pickwrap"><label>Send these to:</label>'
+            f'<select class="pick" onchange="onPick(this)">{options_html()}</select>'
+            f'<input class="newname" type="text" placeholder="New playlist name" '
+            f'oninput="refreshTally()" hidden></div></div>'
+            f'<div class="status">skipped (left in place)</div>'
+            f'<details><summary>show {min(len(vids), SAMPLE_CAP)} of {len(vids)} '
+            f'video(s)</summary><ol class="vids">{"".join(rows)}{more}</ol></details>'
+            f'</section>')
+
+    def _embed(obj) -> str:
+        s = json.dumps(obj, ensure_ascii=False)
+        return (s.replace("<", "\\u003c").replace(">", "\\u003e")
+                 .replace("&", "\\u0026")
+                 .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+    counts_json = _embed(cat_counts)
+    owned_json = _embed(owned)
+    src_title = esc(source.get("title", ""))
+    src_id = esc(source.get("id", ""))
+    uncat_note = (f'<p class="uncat">{uncategorized} video(s) had no YouTube '
+                  "category (deleted/private/unavailable) and can\u2019t be "
+                  "category-sorted \u2014 they\u2019re left out of this map.</p>"
+                  if uncategorized else "")
+
+    page = f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Category Map \u2014 {src_title}</title>
+<style>
+:root{{--bg:#0f1218;--surface:#171b22;--card:#1c2029;--border:rgba(255,255,255,.09);
+  --text:#e9ecf1;--dim:#9aa3b0;--accent:#5b9dd9;--accent2:#7ee0b8;--line:#252a34;
+  --ok:#3ecf8e;--warn:#e0b23a;}}
+@media (prefers-color-scheme:light){{:root{{--bg:#eef1f5;--surface:#ffffff;
+  --card:#fbfcfe;--border:rgba(20,30,50,.14);--text:#1a2230;--dim:#5a6472;
+  --accent:#2563a8;--accent2:#0f8a5f;--line:#e3e7ee;--ok:#0f8a5f;--warn:#a9791a;}}}}
+*{{box-sizing:border-box;min-width:0}}
+body{{margin:0;background:var(--bg);color:var(--text);line-height:1.5;
+  font-family:'Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif}}
+.wrap{{max-width:900px;margin:0 auto;padding:32px 20px 120px}}
+h1{{font-size:30px;line-height:1.12;margin:0 0 6px;font-weight:650}}
+.sub{{font-family:ui-monospace,Consolas,monospace;font-size:12px;letter-spacing:.3px;
+  color:var(--dim);margin-bottom:14px;overflow-wrap:break-word}}
+.lead{{color:var(--dim);font-size:15px;margin:0 0 8px}}
+.uncat{{color:var(--warn);font-size:13px;margin:6px 0 0}}
+.cat{{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:16px 18px;margin:14px 0}}
+.cathead{{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  justify-content:space-between}}
+.catname{{font-size:18px;font-weight:640;display:flex;align-items:center;gap:10px}}
+.cnt{{font-family:ui-monospace,Consolas,monospace;font-size:12px;font-weight:700;
+  color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent);
+  border-radius:20px;padding:2px 10px}}
+.pickwrap{{display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
+.pickwrap label{{font-size:13px;color:var(--dim)}}
+select,.newname{{font:inherit;font-size:14px;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  max-width:230px}}
+.status{{font-size:13px;color:var(--dim);margin-top:10px}}
+.status.ok{{color:var(--ok);font-weight:600}}
+details{{margin-top:10px}}
+summary{{cursor:pointer;color:var(--dim);font-size:13px}}
+ol.vids{{margin:8px 0 0;padding-left:22px}}
+ol.vids li{{margin:3px 0;font-size:14px;overflow-wrap:break-word}}
+ol.vids a{{color:var(--accent);text-decoration:none}}
+ol.vids a:hover{{text-decoration:underline}}
+.ch{{color:var(--dim);font-size:12px}}
+.more{{color:var(--dim);list-style:none;margin-left:-14px}}
+.bar{{position:fixed;left:0;right:0;bottom:0;background:var(--surface);
+  border-top:1px solid var(--border);padding:12px 20px;display:flex;gap:14px;
+  align-items:center;justify-content:center;flex-wrap:wrap}}
+#tally{{font-size:14px;color:var(--dim)}}
+button{{font:inherit;font-size:15px;font-weight:600;padding:10px 20px;border-radius:9px;
+  border:0;background:var(--accent);color:#fff;cursor:pointer}}
+button:hover{{filter:brightness(1.08)}}
+.hint{{color:var(--dim);font-size:12px;max-width:640px;margin:2px auto 0;text-align:center}}
+</style></head><body><div class="wrap">
+<h1>Category map</h1>
+<div class="sub">SOURCE: {src_title} \u00b7 {src_id} \u00b7 {total} categorized video(s) \u00b7 {len(cats_sorted)} categor{'y' if len(cats_sorted)==1 else 'ies'}</div>
+<p class="lead">These are the YouTube categories your saved videos <b>actually</b> fall into.
+For each one, pick which of your playlists it should sort into (or type a new name, or leave it skipped).
+Then <b>Download config.json</b>, drop it next to <span class="mono">youtube_cleaner.py</span>, and run a sort.</p>
+{uncat_note}
+{"".join(cards)}
+<div class="bar">
+  <span id="tally">0 categories mapped</span>
+  <button onclick="downloadConfig()">Download config.json</button>
+  <div class="hint">Nothing is changed on YouTube. This only builds a config file; run
+    <span class="mono">sort --source {src_id} --mode category</span> to preview the moves.</div>
+</div>
+<script>
+const CATCOUNT = {counts_json};
+const OWNED = {owned_json};
+const OWNED_SET = new Set(OWNED);
+
+function onPick(sel){{
+  const nn = sel.parentNode.querySelector('input.newname');
+  if (sel.value === '__new__') {{ nn.hidden = false; nn.focus(); }}
+  else {{ nn.hidden = true; }}
+  refreshTally();
+}}
+
+function buildConfig(){{
+  const cmap = {{}};
+  document.querySelectorAll('section.cat').forEach(function(sec){{
+    const cid = sec.getAttribute('data-cat');
+    const sel = sec.querySelector('select.pick');
+    let target = sel.value;
+    if (target === '__skip__') return;
+    if (target === '__new__') {{
+      target = sec.querySelector('input.newname').value.trim();
+      if (!target) return;
+    }}
+    cmap[cid] = target;
+  }});
+  return {{classify: {{mode: 'category', create_missing: true,
+                       unmatched: 'leave', category_map: cmap}}}};
+}}
+
+function refreshTally(){{
+  const cmap = buildConfig().classify.category_map;
+  let cats = 0, vids = 0, creates = 0;
+  document.querySelectorAll('section.cat').forEach(function(sec){{
+    const cid = sec.getAttribute('data-cat');
+    const st = sec.querySelector('.status');
+    const cnt = CATCOUNT[cid] || 0;
+    if (Object.prototype.hasOwnProperty.call(cmap, cid)) {{
+      const name = cmap[cid];
+      cats++; vids += cnt;
+      const willCreate = !OWNED_SET.has(name);
+      if (willCreate) creates++;
+      st.textContent = '\u2192 ' + cnt + ' video(s) into "' + name + '"' +
+        (willCreate ? '  (would create)' : '');
+      st.className = 'status ok';
+    }} else {{
+      st.textContent = 'skipped (left in place)';
+      st.className = 'status';
+    }}
+  }});
+  document.getElementById('tally').textContent =
+    cats + ' categor' + (cats === 1 ? 'y' : 'ies') + ' mapped \u00b7 ' +
+    vids + ' video(s) will sort \u00b7 ' + creates + ' new playlist(s)';
+}}
+
+function downloadConfig(){{
+  const cfg = buildConfig();
+  if (Object.keys(cfg.classify.category_map).length === 0) {{
+    alert('Map at least one category to a playlist first.');
+    return;
+  }}
+  const data = JSON.stringify(cfg, null, 2);
+  const blob = new Blob([data], {{ type: 'application/json' }});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'config.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}}
+
+refreshTally();
+</script>
+</div></body></html>"""
+
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(page)
+    return len(page)
+
+
+def cmd_map(args) -> None:
+    """Scan a source playlist, group the user's saved videos by their REAL
+    YouTube category, and write an interactive HTML page to map each present
+    category to one of the user's playlists (downloads config.json)."""
+    youtube = get_service()
+    owned = fetch_playlists(youtube)
+
+    special = special_playlist_name(args.source)
+    if special:
+        _special_playlist_notice(special, args.source)
+        return
+    source = next((p for p in owned if p["id"] == args.source), None)
+    if source is None:
+        sys.exit(
+            f"ERROR: source playlist '{args.source}' is not one of your playlists.\n"
+            "Run 'python youtube_cleaner.py playlists' to see valid IDs."
+        )
+
+    print(f"\nSource : {source['title']}  ({args.source})")
+    items = fetch_playlist_items(youtube, args.source)
+    print(f"Scanned {len(items)} item(s). Fetching video categories...")
+    meta = fetch_video_metadata(youtube, [it["video_id"] for it in items])
+    cat_names = fetch_category_names(youtube)
+
+    groups: dict[str, list[dict]] = {}
+    uncategorized = 0
+    for it in items:
+        vid = it["video_id"]
+        m = meta.get(vid, {})
+        cid = m.get("category_id")
+        if not cid:
+            uncategorized += 1
+            continue
+        groups.setdefault(str(cid), []).append({
+            "video_id": vid,
+            "title": str(m.get("title") or it.get("title") or "(unknown)"),
+            "channel": m.get("channel", ""),
+        })
+
+    if not groups:
+        print("\nNo categorizable videos found (all unavailable, or none carry a "
+              "YouTube category). Nothing to map.")
+        return
+
+    # Don't offer the source playlist itself as a target.
+    owned_titles = [p["title"] for p in owned if p["id"] != args.source]
+
+    print("\nCategories in your saved videos (largest first):")
+    for cid, vids in sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True):
+        name = cat_names.get(cid) or f"Category {cid}"
+        print(f"  {len(vids):>4}  {name}")
+    if uncategorized:
+        print(f"  {uncategorized:>4}  (no category / unavailable -- not mappable)")
+
+    if getattr(args, "json", None):
+        dump = {
+            "source": {"id": args.source, "title": source["title"]},
+            "uncategorized": uncategorized,
+            "categories": [
+                {"category_id": cid, "name": cat_names.get(cid) or f"Category {cid}",
+                 "count": len(vids), "videos": vids}
+                for cid, vids in sorted(groups.items(),
+                                        key=lambda kv: len(kv[1]), reverse=True)
+            ],
+        }
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump(dump, fh, ensure_ascii=False, indent=2)
+        print(f"\nGrouping written to {args.json}")
+
+    out = args.html or "category-map.html"
+    render_map_html({"id": args.source, "title": source["title"]},
+                    groups, cat_names, owned_titles, uncategorized, out)
+    print(f"\nInteractive category-map page written to {out}")
+    print("  Open it, map each category to a playlist, Download config.json,")
+    print("  then preview the sort:")
+    print(f"    python youtube_cleaner.py sort --source {args.source} --mode category")
 
 
 def cmd_sort(args) -> None:
@@ -2487,6 +2833,19 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument("--yes", action="store_true",
                        help="Skip the typed 'DELETE' confirmation (for non-interactive runs).")
 
+    mp = sub.add_parser("map", help="Scan a source playlist, group your saved videos by "
+                                    "their real YouTube category, and write an interactive "
+                                    "HTML page to map each PRESENT category to one of your "
+                                    "playlists (downloads config.json).")
+    mp.add_argument("--source", required=True,
+                    help="Source playlist ID to analyze (e.g. Favorites, or an 'Unsorted' "
+                         "playlist).")
+    mp.add_argument("--html", metavar="PATH", default=None,
+                    help="Output HTML path (default: category-map.html).")
+    mp.add_argument("--json", metavar="PATH", default=None,
+                    help="Also dump the category grouping (counts + video lists) to this "
+                         "JSON file.")
+
     srt = sub.add_parser("sort", help="Move videos from a source playlist into topic "
                                       "playlists using rules.json (creates them if needed).")
     srt.add_argument("--source", required=True,
@@ -2597,7 +2956,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     handlers = {"auth": cmd_auth, "playlists": cmd_playlists,
-                "setup": cmd_setup,
+                "setup": cmd_setup, "map": cmd_map,
                 "clean": cmd_clean, "sort": cmd_sort, "apply": cmd_apply,
                 "undo": cmd_undo, "autosort": cmd_autosort,
                 "autopurge": cmd_autopurge,
