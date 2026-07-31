@@ -72,15 +72,11 @@ python youtube_cleaner.py playlists
 # Choose how videos get sorted (writes config.json). See "Classifier" below.
 python youtube_cleaner.py setup
 
-# Prefer to map by eye? Scan a playlist's REAL videos and build an offline page.
-# TIER 1 (default): map each YouTube category your videos fall under to a playlist,
-# and split mixed categories with per-video overrides. Downloads config.json only.
-python youtube_cleaner.py map --source PLxxxxxxxx --tier category --html category-map.html
-
-# TIER 2 (advanced): map content-derived keyword rules from YOUR channels + title
-# words. Downloads rules.json + config.json. The two tiers are separate pages.
-python youtube_cleaner.py map --source PLxxxxxxxx --tier keyword --html keyword-map.html
-
+# Prefer to map by eye? Scan a playlist's REAL videos and build ONE offline page:
+# map each YouTube category your videos fall under to a playlist, split mixed
+# categories with per-video overrides, and (optional) add keyword rules that win
+# over the category map. Downloads a single self-contained config.json.
+python youtube_cleaner.py map --source PLxxxxxxxx --html map.html
 # Note: We need to provide the playlist id and not the playlist name
 # DRY-RUN: show what WOULD be deleted (older than 2 years) — no changes
 python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2
@@ -180,12 +176,12 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 | Option        | Meaning                                                                     |
 |---------------|-----------------------------------------------------------------------------|
 | `--source`    | Playlist ID whose real videos are scanned. **Required.** |
-| `--tier`      | Which page to build: `category` (**default**, Tier 1 — categories + per-video overrides → `config.json`) or `keyword` (Tier 2 — keyword rules from your channels/title words → `rules.json` + `config.json`). The two tiers are **separate** pages. |
-| `--html PATH` | Where to write the offline interactive page. Default depends on `--tier`: `category-map.html` or `keyword-map.html`. |
-| `--json PATH` | Also dump the grouped scan (categories + titles, or keyword candidates) to JSON. |
+| `--tier`      | Which page to build. `both` (**default**) = the combined page: category cards + per-video overrides **and** an optional keyword section, downloading one self-contained `config.json`. Advanced single-tier variants: `category` (category cards only → `config.json` pinned to `mode: category`) or `keyword` (keyword section only → `rules.json` + a `config.json` pinned to `mode: keyword`). |
+| `--html PATH` | Where to write the offline interactive page. Default depends on `--tier`: `map.html` (both), `category-map.html`, or `keyword-map.html`. |
+| `--json PATH` | Also dump the grouped scan (categories + titles, and keyword candidates) to JSON. |
 
 Read-only — `map` never moves or deletes anything; it only writes the page/JSON. See
-**Category map** (Tier 1) and **Keyword rules** (Tier 2) under the Classifier section.
+**Map by eye** under the Classifier section.
 
 
 ---
@@ -316,20 +312,30 @@ video and the first hit wins. You never pick a tier per video.
 | Tier | Name | Setup | What it does |
 |------|------|-------|--------------|
 | **0** | Category (universal) | zero-config | Sorts by YouTube's own `categoryId` (Music, Gaming, Education…) into auto-named playlists. Works for anyone. |
-| **1** | Category → **my** playlists | `setup` → `[2]`, or `map --tier category` | Maps the categories you **actually have** to one of **your** playlist names on the offline page, and lets you **override individual videos** when one category holds mixed topics. Writes `config.json` (`mode: category`). **Recommended.** |
-| **2** | Keyword rules | `setup` → `[3]`, or `map --tier keyword` | Suggests keyword rules from **your** channels & title words on a **separate** offline page → `rules.json` (+ a `config.json` pinned to `mode: keyword`). Substring match on title + channel; see `rules.example.json`. |
-| **3** | AI classify | `setup` → `[4]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
+| **1** | Category → **my** playlists | `setup` → `[2]`, or `map` | Maps the categories you **actually have** to one of **your** playlist names on the offline page, and lets you **override individual videos** when one category holds mixed topics. **Recommended.** |
+| **2** | Keyword rules | `setup` → `[2]` (same page), or `map` | Optional keyword rules built from **your** channels & title words, plus any you type in. When a keyword matches it **wins over** the category map. Substring match on title + channel; see `rules.example.json`. |
+| **3** | AI classify | `setup` → `[3]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
 
-**Tiers are isolated by default.** Tier 1's page writes `mode: category` (only the
-category map + your per-video overrides run — keyword rules are ignored, even a stray
-`rules.json`). Tier 2's page writes `mode: keyword` (only keyword rules run). This keeps
-each page focused and stops one tier's leftovers from leaking into another.
+**One combined page, one file.** `setup → [2]` (and `map`) build a **single** offline
+page with the category cards **and** an optional keyword section, and download **one
+self-contained `config.json`** (`mode: cascade`). Keyword rules are **embedded** inside
+that config, so there is no second `rules.json` to forget or leave stale. Keywords are
+**optional**; when you set one it takes **priority** over the category map.
 
-**Advanced — combine tiers:** the engine still supports a **first-match cascade**
-(`keyword rule → AI → category map → leave in place`). To layer keyword rules *over* the
-category map in one run, hand-edit `config.json` to `"mode": "cascade"` (and keep both
-`category_map` and `rules.json`). Or force a single layer for one run with
-`sort --mode keyword|ai|category`.
+**Priority (first match wins):** per-video override → keyword rule → category map →
+leave in place. So a single video can override its category, a keyword can override the
+category for everything it matches, and anything unmatched stays put.
+
+**Embedded keyword rules are authoritative.** When `config.json` carries a
+`classify.keyword_rules` list (even an empty one), the engine uses **only** those — a
+leftover `rules.json` or the built-in defaults are ignored. This is what stops a stray
+rule from silently grabbing videos. Power users can still keep a hand-written `rules.json`
+(used only when `config.json` has **no** `keyword_rules` key).
+
+**Advanced single-tier pages:** `map --tier category` builds a category-only page
+(`config.json` pinned to `mode: category`); `map --tier keyword` builds a keyword-only
+page (`rules.json` + `config.json` pinned to `mode: keyword`). Or force a single layer for
+one run with `sort --mode keyword|ai|category`.
 
 **Create-on-demand:** a mapped playlist that doesn't exist yet is created the
 **first** time a video actually routes to it (idempotent by name — no duplicates
@@ -343,11 +349,12 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 
 | Field | Meaning |
 |-------|---------|
-| `mode` | `cascade` (default), `category`, `keyword`, or `ai`. `sort --mode` overrides it. |
+| `mode` | `cascade` (default, written by the combined map page), `category`, `keyword`, or `ai`. `sort --mode` overrides it. |
 | `create_missing` | `true` = create a mapped playlist on first use; `false` = skip + warn. |
 | `unmatched` | `"leave"` (default) or a playlist name to collect everything unmatched. |
-| `category_map` | `{ "<categoryId>": "<your playlist name>" }` — the **Tier 1** map (from `setup → [2]` or `map --tier category`). When absent, Tier 0 falls back to YouTube's standard category names. |
-| `video_overrides` | `{ "<videoId>": "<playlist name>" }` — **Tier 1 per-video exceptions**. Checked **first**, so a single video can override its category's mapping. Use the sentinel `"__leave__"` to leave just that one video in place. Written by the category page when you override individual videos. |
+| `category_map` | `{ "<categoryId>": "<your playlist name>" }` — the category map (from `setup → [2]` or `map`). When absent, Tier 0 falls back to YouTube's standard category names. |
+| `video_overrides` | `{ "<videoId>": "<playlist name>" }` — **per-video exceptions**. Checked **first**, so a single video can override its category's mapping. Use the sentinel `"__leave__"` to leave just that one video in place. Written by the map page when you override individual videos. |
+| `keyword_rules` | `[ { "any": ["<keyword>"], "playlist": "<name>" } ]` — **optional** keyword rules embedded straight into the config by the combined map page. Checked **after** per-video overrides but **before** the category map. When this key is present (even `[]`) it is **authoritative**: `rules.json` and the built-in defaults are ignored. Omit the key to fall back to `rules.json`. |
 | `ai.enabled` | `false` by default. `true` turns Tier 3 on. |
 | `ai.provider` | `ollama` (free, local, no key) · `openai` · `anthropic` · `gemini`. |
 | `ai.model` | Model name for that provider (e.g. `llama3.1`, `gpt-4o-mini`). |
@@ -356,29 +363,34 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 | `ai.batch_size` | Videos classified per request (default `50`, 1–200). AI batches titles so it makes a few requests instead of one per video — cheaper and much faster. Smaller = safer; larger saves little extra. |
 | `ai.abstain` | Recall vs precision knob: `high` (only files on a clear match — fewest moves), `normal` (best-fit; leaves a video only when no playlist is a reasonable home — **default**), `low` (takes the best match unless truly unrelated — most moves). Turn **up** if you see wrong guesses; turn **down** if too many videos are left unsorted. |
 
-### Category map (`map --tier category`) — Tier 1, by eye + per-video overrides
+### Map by eye (`map`) — one page: categories + optional keywords
 
-Both `setup → [2]` and `map --tier category` run the **same** content-derived flow:
-they scan a playlist you pick and show only the categories you **actually have**, so you
-never guess which of your videos fall under "Science & Technology". `map` is the direct
-entry point:
+Both `setup → [2]` and `map` run the **same** content-derived flow: they scan a playlist
+you pick and show only the categories you **actually have**, so you never guess which of
+your videos fall under "Science & Technology". `map` is the direct entry point:
 
 ```powershell
-python youtube_cleaner.py map --source PLxxxxxxxx --tier category --html category-map.html
+python youtube_cleaner.py map --source PLxxxxxxxx --html map.html
 ```
 
-It scans the **real videos** in `--source` and builds one self-contained **offline**
-page (same look as the `sort --html` review page):
+It scans the **real videos** in `--source` and builds **one** self-contained **offline**
+page (same look as the `sort --html` review page) with two parts:
 
-- Each **category present in your videos** (largest first) gets a dropdown — pick one of
-  **your** playlists, type a new name, or skip. Set the category once and every video in
-  it follows.
+- **Category cards.** Each **category present in your videos** (largest first) gets a
+  dropdown — pick one of **your** playlists, type a new name, or skip. Set the category
+  once and every video in it follows.
 - **Per-video overrides (fixes mixed categories):** expand a category to reveal every
   video in it, each with its own small dropdown that defaults to *"same as category"*.
   When one category holds different real topics (e.g. *Howto & Style* = 2 pregnancy
   videos + 1 recipe), map the category to the majority target and flip just the
   exceptions — no need to hand-pick every video. Options per video: same-as-category, one
   of your playlists, **＋ new…**, or **leave this one in place**.
+- **Keyword rules (optional, higher priority).** Below the categories, the page suggests
+  keyword rules from the **channels you save 2+ videos from** and the **frequent words in
+  your titles** — map any of them to a playlist, or type your **own** keyword/phrase and
+  target with the **"＋ Add keyword"** box. A keyword that matches a video's title or
+  channel **wins over** the category map. Leave this section untouched to sort by category
+  alone.
 
 Click **Download config.json**, drop it next to `youtube_cleaner.py`, then preview:
 
@@ -386,49 +398,32 @@ Click **Download config.json**, drop it next to `youtube_cleaner.py`, then previ
 python youtube_cleaner.py sort --source PLxxxxxxxx
 ```
 
-The downloaded `config.json` sets `"mode": "category"`, so the sort runs **only** the
-category map + your per-video overrides — keyword rules (even a leftover `rules.json`)
-are ignored. The config carries `category_map` and, if you set any, `video_overrides`.
+**One self-contained file.** The downloaded `config.json` uses `"mode": "cascade"` and
+**embeds** your keyword rules inside it (`classify.keyword_rules`) alongside
+`category_map` and any `video_overrides` — there is no separate `rules.json` to manage.
+Because the embedded list is authoritative, a leftover `rules.json` or the built-in
+defaults are ignored, so a stray rule can't quietly grab a video. Priority at sort time is
+**per-video override → keyword → category → leave in place**.
 
 Notes: it lists **your** playlists as targets (the source is excluded); videos YouTube
 left un-categorized are counted but can't be category-mapped (no category to key on) — a
-per-video override or a Tier 2 keyword rule can still catch them; the page runs
-client-side — nothing leaves your browser. Add `--json map.json` to also dump the grouped
-scan.
+per-video override or a keyword rule can still catch them; the page runs client-side —
+nothing leaves your browser. Add `--json map.json` to also dump the grouped scan.
 
-### Keyword rules (Tier 2) — content-derived, on a separate page
+**Keyword rules for power users.** A keyword rule is ultimately **human intent**
+(*"everything from this channel → Programming"*, *"any title with `django` → Web"*). The
+combined page embeds them in `config.json`, but you can also keep a hand-written
+`rules.json` (used **only** when `config.json` has no `keyword_rules` key); see
+`rules.example.json` for the full format and priority notes. The keyword layer stays
+**offline, no-API-key, fully deterministic, and free**. Before any keyword/cascade run the
+tool prints which rule targets don't exist yet — either *"WILL be created on first match"*
+(`create_missing: true`) or *"will be SKIPPED"* (`false`) — so a copied rule never
+surprises you.
 
-Both `setup → [3]` and `map --tier keyword` build Tier 2 on their **own** page (separate
-from the category page): they scan a playlist you pick, mine the **channels you save 2+
-videos from** and the **frequent words in your titles**, and let you map any of them to a
-playlist.
-
-```powershell
-python youtube_cleaner.py map --source PLxxxxxxxx --tier keyword --html keyword-map.html
-```
-
-Click **Download rules.json + config.json** and drop both next to `youtube_cleaner.py`,
-then preview:
-
-```powershell
-python youtube_cleaner.py sort --source PLxxxxxxxx
-```
-
-The downloaded `config.json` sets `"mode": "keyword"`, so the sort runs **only** your
-keyword rules — the category map isn't consulted. (Want keyword rules to layer *over* the
-category map instead? Keep both files and hand-edit `config.json` to `"mode": "cascade"`.)
-
-A keyword rule is ultimately **human intent** (*"everything from this channel →
-Programming"*, *"any title with `django` → Web"*), so the page gives you a strong,
-content-based **starting set** you can accept or trim. Tier 2 stays the **offline,
-no-API-key, fully deterministic, free** power-user layer. Edit `rules.json` by hand
-afterward to add your own keywords/targets; see `rules.example.json` for the full format
-and priority notes.
-
-**Load-time heads-up:** because rule targets are **names** (not bound to your account),
-every keyword/cascade run first prints which targets don't exist yet — either *"WILL be
-created on first match"* (`create_missing: true`) or *"will be SKIPPED"* (`false`) — so a
-copied `rules.example.json` never surprises you.
+**Advanced single-tier pages.** Prefer to keep the tiers apart? `map --tier category`
+builds a category-only page (`config.json` with `mode: category` — keyword rules never
+run) and `map --tier keyword` builds a keyword-only page (`rules.json` + a `config.json`
+with `mode: keyword`).
 
 ### AI (Tier 3) — bring your own key or run local
 
@@ -464,7 +459,7 @@ layer for that run, and the cascade continues.
   > for that run only, never saved). Schedulers skip the prompt and just disable AI.
 
 **`sort` vs `sort --mode ai`:** plain `sort` uses whatever `mode` your `config.json` sets.
-When you enable AI (`setup → [4]` writes `mode: cascade`), plain `sort` runs the full
+When you enable AI (`setup → [3]` writes `mode: cascade`), plain `sort` runs the full
 **cascade** (keyword → AI → category), so AI is *already* used when nothing earlier
 matched. Use `--mode ai` only to force **AI-only** for a run (skip keyword + category) —
 handy for testing the model or re-classifying a playlist purely by AI.

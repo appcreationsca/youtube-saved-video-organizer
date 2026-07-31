@@ -1,7 +1,7 @@
 {
-  "_comment": "Copy to config.json or run `python youtube_cleaner.py setup` to generate. Read by `sort` and `autosort`. Absent = original keyword-rules behaviour.",
+  "_comment": "Copy to config.json or run `python youtube_cleaner.py setup` to generate. Read by `sort` and `autosort`. The `map` page writes this file for you: mode cascade with category_map, optional video_overrides, and optional embedded keyword_rules. Absent = original keyword-rules (rules.json) behaviour.",
   "classify": {
-    "mode": "category",
+    "mode": "cascade",
     "create_missing": true,
     "unmatched": "leave",
     "category_map": {
@@ -11,6 +11,14 @@
       "27": "Education",
       "28": "Science & Tech"
     },
+    "video_overrides": {
+      "dQw4w9WgXcQ": "Music",
+      "abc123EXAMPLE": "__leave__"
+    },
+    "keyword_rules": [
+      { "any": ["kubernetes", "docker", "terraform"], "playlist": "DevOps" },
+      { "any": ["pregnancy", "trimester"], "playlist": "Pregnancy" }
+    ],
     "ai": {
       "enabled": false,
       "provider": "ollama",
@@ -32,10 +40,12 @@
   },
 
   "_field_help": {
-    "mode": "cascade = keyword rules -> AI -> category (default); category = Tier 0/1 only; keyword = rules.json only; ai = Tier 3 only. Override per-run with `sort --mode`.",
+    "mode": "cascade = per-video override -> keyword rules -> AI -> category (default, what the map page writes); category = override + category map only; keyword = keyword rules only; ai = Tier 3 only. Override per-run with `sort --mode`.",
     "create_missing": "true = create a mapped playlist the first time a video needs it (idempotent by name). false = skip videos whose target playlist doesn't exist yet, with a warning.",
     "unmatched": "'leave' (default) = leave videos that match nothing where they are. Or set a playlist name to collect them.",
     "category_map": "YouTube categoryId -> one of YOUR playlist names. Omit a category to skip it. Standard IDs: 1 Film & Animation, 2 Autos, 10 Music, 15 Pets, 17 Sports, 19 Travel & Events, 20 Gaming, 22 People & Blogs, 23 Comedy, 24 Entertainment, 25 News, 26 Howto & Style, 27 Education, 28 Science & Technology, 29 Nonprofits.",
+    "video_overrides": "videoId -> playlist name. A per-video exception, checked FIRST (before keywords and category), so one video can override its category's mapping. Use the sentinel '__leave__' to leave just that one video in place. Written by the map page when you override individual videos; omit the whole key if you have none.",
+    "keyword_rules": "OPTIONAL embedded keyword rules: [{ any:[<keywords>], playlist:<name> }]. Substring match on title + channel. Checked AFTER per-video overrides but BEFORE the category map, so a keyword wins over the category. When this key is present (even []) it is AUTHORITATIVE -- rules.json and the built-in defaults are ignored. Omit the key entirely to fall back to a hand-written rules.json (see rules.example.json).",
     "ai": "Tier 3, OFF by default. enabled=true turns it on. provider: ollama (free, local, no key) | openai | anthropic | gemini. model: the model name for that provider. endpoint: Ollama base URL (ollama only). api_key_env: NAME of the environment variable holding your API key (the key itself is NEVER stored here; it is read from the environment at runtime). Not needed for ollama. batch_size: how many videos to classify per request (default 50, 1-200). The classifier batches titles so it makes a few requests instead of one per video -- cheaper and much faster. Smaller = safer (bounded fallback, better accuracy on long lists); larger saves little extra. abstain: recall vs precision knob -- 'high' only files on a clear match (fewest moves, most left in place), 'normal' files into the best-fitting playlist and leaves a video only when no playlist is a reasonable home (default), 'low' takes the best match unless the video is truly unrelated (most moves). Turn it up (toward 'high') if you see wrong guesses; turn it down (toward 'low') if too many videos are left unsorted.",
     "purge": "OPT-IN scheduled age-purge used by the `autopurge` command. OFF by default. enabled=true activates it. years: delete items older than this many WHOLE years. date_basis: 'added' (when saved to the playlist) or 'published' (upload date). playlists: EXACT titles of the playlists to purge -- only these are ever touched (autopurge never purges everything). protect: comma-separated titles to skip even if listed. daily_delete_budget: max deletes per run (~50 quota units each). Deletions are PERMANENT; dry-run first with `autopurge --playlist <id> --years N`."
   }

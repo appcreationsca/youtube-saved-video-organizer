@@ -490,6 +490,26 @@ def load_config() -> dict:
     return {}
 
 
+def _effective_rules(rules: dict, config: dict) -> dict:
+    """Resolve the authoritative keyword-rule source for a sort.
+
+    The combined map page writes keyword rules straight into
+    ``config.classify.keyword_rules`` so config.json is fully self-contained --
+    there is no second file to forget or leave stale. When that key is present
+    (even as an empty list, meaning "no keyword rules"), it WINS: rules.json and
+    the built-in DEFAULT_RULES keyword rules are ignored. This is what stops a
+    leftover rules.json -- or the built-in "Travel & Tourism" fallback rule --
+    from silently grabbing videos in cascade mode.
+
+    When the key is absent, behaviour is unchanged: rules.json (or DEFAULT_RULES)
+    is used, so existing power-user setups keep working.
+    """
+    kw = (config.get("classify") or {}).get("keyword_rules")
+    if kw is None:
+        return rules
+    return {"keyword_rules": kw, "default_playlist": rules.get("default_playlist")}
+
+
 def fetch_video_metadata(youtube, video_ids: list[str]) -> dict[str, dict]:
     """Batch-fetch categoryId + title + channel + a short description for videos
     (1 unit per 50 IDs). The description is truncated here to keep memory small;
@@ -1482,12 +1502,10 @@ def cmd_setup(args) -> None:
 
     Tier 0  -> sort by YouTube category into auto-named playlists (zero setup);
                writes config.json.
-    Tier 1  -> scan a playlist's real videos and map the categories you actually
-               have to YOUR playlists, on the offline map page (downloads
-               config.json). Content-derived, not a blind list.
-    Tier 2  -> same scan; map content-derived keyword rules (your channels/title
-               words) on the page (downloads rules.json).
-    Tier 3  -> AI classify (bring-your-own-key or local Ollama); writes config.json.
+    Map     -> scan a playlist's real videos and, on the offline map page, map
+               the categories you actually have to YOUR playlists AND (optional)
+               add keyword rules. Downloads one self-contained config.json.
+    AI      -> AI classify (bring-your-own-key or local Ollama); writes config.json.
     """
     youtube = get_service()
     owned = fetch_playlists(youtube)
@@ -1496,15 +1514,15 @@ def cmd_setup(args) -> None:
     print(f"Found {len(owned)} playlist(s) in your account.\n")
     print("How should videos be sorted? (you can combine these later)")
     print("    [1] By YouTube category      -- zero setup: Music, Gaming, Education...")
-    print("    [2] Map categories to MY playlists   -- scans your real videos (recommended)")
-    print("    [3] Keyword rules            -- from your real channels & titles (rules.json)")
-    print("    [4] AI                       -- smart; needs a key or local Ollama")
+    print("    [2] Map by eye               -- scan your real videos; map categories +")
+    print("                                    optional keywords to YOUR playlists (recommended)")
+    print("    [3] AI                       -- smart; needs a key or local Ollama")
 
     choice = ""
-    while choice not in {"1", "2", "3", "4"}:
-        choice = _prompt("    Pick a starting point [1/2/3/4]: ").strip()
-        if choice not in {"1", "2", "3", "4"}:
-            print("    Please enter 1, 2, 3, or 4.")
+    while choice not in {"1", "2", "3"}:
+        choice = _prompt("    Pick a starting point [1/2/3]: ").strip()
+        if choice not in {"1", "2", "3"}:
+            print("    Please enter 1, 2, or 3.")
 
     cfg: dict = {"mode": "cascade", "create_missing": True, "unmatched": "leave"}
 
@@ -1516,10 +1534,12 @@ def cmd_setup(args) -> None:
         print("time a video needs one. Run a dry-run first to preview what gets created.\n")
 
     elif choice == "2":
-        print("\nMap categories from your ACTUAL saved videos -- not a blind list.")
-        print("Pick a playlist to scan; the page shows only the categories you really")
-        print("have (each expandable to override individual videos). Tier 1 is")
-        print("category-only -- keyword rules are a separate step ([3]).\n")
+        print("\nMap from your ACTUAL saved videos -- not a blind list. Pick a playlist")
+        print("to scan; the page shows only the categories you really have (each")
+        print("expandable to override individual videos), plus an OPTIONAL keyword")
+        print("section (auto-suggested from your channels/titles, or add your own).")
+        print("Keywords win over the category map when they match. One file is")
+        print("downloaded: a self-contained config.json.\n")
         picked = _pick_source_playlist(owned)
         if not picked:
             print("Cancelled -- nothing written.")
@@ -1527,39 +1547,17 @@ def cmd_setup(args) -> None:
         src_id, src_title = picked
         print(f"\nSource : {src_title}  ({src_id})")
         written = _scan_and_render_map(youtube, owned, src_id, src_title,
-                                       "category-map.html", tier="category")
+                                       "map.html", tier="both")
         if written:
             print(f"\nInteractive map page written to {written}. Open it, map each")
             print("category to a playlist (expand a category to override individual")
-            print("videos), then Download config.json (drop it next to")
-            print("youtube_cleaner.py) and preview -- no changes are made:")
+            print("videos), optionally add keyword rules, then Download config.json")
+            print("(drop it next to youtube_cleaner.py) and preview -- no changes are made:")
             print(f"    python youtube_cleaner.py sort --source {src_id}")
         return
 
     elif choice == "3":
-        print("\nKeyword rules built from your ACTUAL videos -- not generic buckets.")
-        print("Pick a playlist to scan; the page suggests keyword rules from the")
-        print("channels you save from and the frequent words in your titles. This")
-        print("is the keyword-only page -- categories are a separate step ([2]).\n")
-        picked = _pick_source_playlist(owned)
-        if not picked:
-            print("Cancelled -- nothing written.")
-            return
-        src_id, src_title = picked
-        print(f"\nSource : {src_title}  ({src_id})")
-        written = _scan_and_render_map(youtube, owned, src_id, src_title,
-                                       "keyword-map.html", tier="keyword")
-        if written:
-            print(f"\nInteractive map page written to {written}. Map the channels/words")
-            print("you want, then Download rules.json + config.json (drop both next to")
-            print("youtube_cleaner.py) and preview -- no changes are made:")
-            print(f"    python youtube_cleaner.py sort --source {src_id}")
-            print("Edit rules.json afterward to add your own keywords; see "
-                  "rules.example.json.")
-        return
-
-    elif choice == "4":
-        print("\nTier 3 (AI). The classifier reads each video's title and picks from")
+        print("\nAI. The classifier reads each video's title and picks from")
         print("YOUR playlists. AI stays OFF unless enabled here.")
         print("  What IS saved to config.json: the provider, model, and the NAME of the")
         print("  environment variable that holds your key (e.g. OPENAI_API_KEY).")
@@ -1593,7 +1591,7 @@ def cmd_setup(args) -> None:
             print("  If you skip this, sort will offer a one-time hidden prompt for the key.")
         cfg["ai"] = ai_block
         cfg["mode"] = "cascade"
-        print("\nTier 3 enabled in cascade: keyword rules -> AI -> category -> leave.\n")
+        print("\nAI enabled in cascade: keyword rules -> AI -> category -> leave.\n")
 
     config = {"classify": cfg}
     with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
@@ -1604,7 +1602,7 @@ def cmd_setup(args) -> None:
     print("  python youtube_cleaner.py playlists          # find a source playlist ID")
     print("  python youtube_cleaner.py sort --source <PLAYLIST_ID>")
     print("Add --execute once the plan looks right.")
-    if choice == "4":
+    if choice == "3":
         print("\nAI usage:")
         print("  sort --source <ID>            # cascade: keyword -> AI -> category (AI IS used)")
         print("  sort --source <ID> --mode ai  # force AI-only for this run")
@@ -2016,27 +2014,29 @@ def _extract_keyword_candidates(items: list[dict], meta: dict,
 def render_map_html(source: dict, groups: dict[str, list[dict]],
                     cat_names: dict, owned_titles, uncategorized: int,
                     out_path: str, keyword_candidates: dict | None = None,
-                    tier: str = "category") -> int:
+                    tier: str = "both") -> int:
     """Write a self-contained, OFFLINE interactive mapping page.
 
     ``groups`` is categoryId -> list of {video_id, title, channel} for the
     videos ACTUALLY saved in the source playlist (only categories present in the
     user's own videos appear).
 
-    ``tier`` selects which single Tier the page configures -- the two are kept
-    strictly separate so a Tier-1 user never sees (or accidentally applies)
-    Tier-2 keyword rules:
+    ``tier`` selects what the page configures:
 
-      "category" (Tier 1): one card per real category with a dropdown to map it
-        to one of your playlists, PLUS an expandable per-video list where you can
-        override individual videos (e.g. a category is 2 pregnancy + 1 food -> map
-        the category to Pregnancy, flip just the food video to Food). "Download
-        config.json" writes classify.category_map + classify.video_overrides with
-        mode "category" (keyword rules are NEVER consulted in this mode).
+      "both" (DEFAULT, the combined page): category cards + per-video overrides
+        AND an OPTIONAL keyword section (auto-derived candidates + a manual
+        "add keyword -> playlist" row). "Download config.json" writes a single
+        self-contained config.json: mode "cascade", category_map,
+        video_overrides (optional) and keyword_rules (optional, embedded). The
+        engine treats embedded keyword_rules as authoritative, so there is no
+        separate rules.json to leave stale. Priority at sort time is
+        per-video override > keyword > category.
 
-      "keyword" (Tier 2): the content-derived keyword-candidate section only
-        (channels/title words from your own videos). "Download" writes rules.json
-        plus a config.json pinned to mode "keyword" (category map ignored).
+      "category" (advanced single-tier): only the category cards; config.json
+        pinned to mode "category" (keyword rules never consulted).
+
+      "keyword" (advanced single-tier): only the keyword-candidate section;
+        writes rules.json plus a config.json pinned to mode "keyword".
 
     Makes ZERO network requests (system fonts, inline CSS/JS).
     """
@@ -2067,7 +2067,7 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
 
     cat_counts: dict[str, int] = {}
     cards = []
-    if tier == "category":
+    if tier in ("category", "both"):
         for cid, vids in cats_sorted:
             cat_counts[cid] = len(vids)
             name = cat_names.get(str(cid)) or cat_names.get(cid) or f"Category {cid}"
@@ -2103,10 +2103,10 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
                  .replace("&", "\\u0026")
                  .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
 
-    # --- Tier 2 (keyword tier only): content-derived keyword-rule candidates ---
+    # --- keyword-rule candidates (keyword tier + combined "both") ---
     kc = keyword_candidates or {}
-    kw_channels = kc.get("channels", []) if tier == "keyword" else []
-    kw_terms = kc.get("terms", []) if tier == "keyword" else []
+    kw_channels = kc.get("channels", []) if tier in ("keyword", "both") else []
+    kw_terms = kc.get("terms", []) if tier in ("keyword", "both") else []
 
     def _kw_card(kind: str, cand: dict) -> str:
         key = cand.get("key", "")
@@ -2129,18 +2129,38 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
             f'{examples}</section>')
 
     kw_section = ""
-    if kw_channels or kw_terms:
-        parts = ['<h2 class="kwh">Keyword rules '
-                 '<span class="kwh-sub">Tier 2 &middot; a rule matches every video whose title/channel contains it</span></h2>',
-                 '<p class="lead">These channels and title words come from <b>your own</b> saved '
-                 'videos. Mapping one writes a keyword rule: every video whose title or channel '
-                 'contains it goes to that playlist. Leave any you don\u2019t want as \u201cskip\u201d.</p>']
+    if tier in ("keyword", "both") and (kw_channels or kw_terms or tier == "both"):
+        if tier == "both":
+            head = ('<h2 class="kwh">Keyword rules '
+                    '<span class="kwh-sub">optional &middot; higher priority than the category map</span></h2>'
+                    '<p class="lead">Keywords are optional but win over the category map when they '
+                    'match: any video whose <b>title or channel</b> contains the word/phrase goes '
+                    'straight to that playlist. Handy when one category holds different topics, or '
+                    'to catch <b>future</b> saves. Leave them all skipped to sort by category only.</p>'
+                    '<div class="addkw"><input id="mkw" type="text" '
+                    'placeholder="keyword or phrase (matches title or channel)" '
+                    'oninput="refreshTally()">'
+                    f'<select id="mkwt" onchange="onManualTarget()">{options_html()}</select>'
+                    '<input id="mkwnew" type="text" placeholder="New playlist name" hidden>'
+                    '<button type="button" class="addbtn" onclick="addKeyword()">'
+                    '\uff0b Add keyword</button></div>')
+        else:
+            head = ('<h2 class="kwh">Keyword rules '
+                    '<span class="kwh-sub">Tier 2 &middot; a rule matches every video whose title/channel contains it</span></h2>'
+                    '<p class="lead">These channels and title words come from <b>your own</b> saved '
+                    'videos. Mapping one writes a keyword rule: every video whose title or channel '
+                    'contains it goes to that playlist. Leave any you don\u2019t want as \u201cskip\u201d.</p>')
+        parts = [head, '<div id="kwlist">']
         if kw_channels:
             parts.append('<h3 class="kwsub">Channels you saved 2+ videos from</h3>')
             parts.extend(_kw_card("channel", c) for c in kw_channels)
         if kw_terms:
             parts.append('<h3 class="kwsub">Frequent words in your titles</h3>')
             parts.extend(_kw_card("term", t) for t in kw_terms)
+        if tier == "both" and not (kw_channels or kw_terms):
+            parts.append('<p class="lead" style="font-size:13px">No repeated channels or '
+                         'title words were found \u2014 add your own above if you want keyword rules.</p>')
+        parts.append('</div>')
         kw_section = "".join(parts)
 
     counts_json = _embed(cat_counts)
@@ -2150,7 +2170,7 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
     uncat_note = (f'<p class="uncat">{uncategorized} video(s) had no YouTube '
                   "category (deleted/private/unavailable) and can\u2019t be "
                   "category-sorted \u2014 they\u2019re left out of this map.</p>"
-                  if uncategorized and tier == "category" else "")
+                  if uncategorized and tier in ("category", "both") else "")
 
     n_cats = len(cats_sorted)
     n_kw = len(kw_channels) + len(kw_terms)
@@ -2169,6 +2189,24 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
                     "<b>config.json</b> (mode: keyword \u2014 the category map is not used). "
                     f'Run <span class="mono">sort --source {src_id}</span> to preview.')
         tally_init = "0 keyword rules"
+    elif tier == "both":
+        page_title = f"Sort map \u2014 {src_title}"
+        h1_text = "Sort map"
+        sub_line = (f"SOURCE: {src_title} \u00b7 {src_id} \u00b7 {total} categorized "
+                    f"video(s) \u00b7 {n_cats} categor{'y' if n_cats == 1 else 'ies'}"
+                    + (f" \u00b7 {n_kw} keyword candidate(s)" if n_kw else ""))
+        intro_lead = ("Map each YouTube category your saved videos <b>actually</b> fall into "
+                      "to one of your playlists (or a new name, or leave it skipped). "
+                      "<b>Expand a category</b> to override individual videos when it holds "
+                      "different topics. Keywords below are <b>optional</b> \u2014 add them to "
+                      "override the category map or catch future saves. Then <b>Download "
+                      "config.json</b> (one self-contained file) and run a sort.")
+        bar_button = "Download config.json"
+        bar_hint = ("Nothing is changed on YouTube. This writes one self-contained "
+                    "<b>config.json</b> (mode: cascade \u2014 override &gt; keyword &gt; "
+                    "category; keyword rules are embedded, no separate file). Run "
+                    f'<span class="mono">sort --source {src_id}</span> to preview the moves.')
+        tally_init = "0 categories mapped"
     else:
         page_title = f"Category map \u2014 {src_title}"
         h1_text = "Category map"
@@ -2251,6 +2289,17 @@ button:hover{{filter:brightness(1.08)}}
   text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);
   background:color-mix(in srgb,var(--accent2) 18%,transparent);border-radius:6px;
   padding:2px 7px;margin-right:2px}}
+.addkw{{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0 4px;
+  padding:12px 14px;background:var(--card);border:1px dashed var(--border);
+  border-radius:10px}}
+.addkw input[type=text]{{font:inherit;font-size:14px;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+  flex:1 1 240px;min-width:160px}}
+.addbtn{{background:var(--accent2);color:#06231a}}
+.kw.manual{{border-left:3px solid var(--accent2)}}
+.rmkw{{font:inherit;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;
+  border:1px solid var(--border);background:var(--surface);color:var(--dim);cursor:pointer}}
+.rmkw:hover{{color:var(--text)}}
 </style></head><body><div class="wrap">
 <h1>{h1_text}</h1>
 <div class="sub">{sub_line}</div>
@@ -2302,9 +2351,8 @@ function catOverrides(sec){{
   return {{ overrides: overrides, count: count }};
 }}
 
-function buildConfig(){{
-  if (TIER === 'keyword')
-    return {{classify: {{mode: 'keyword', create_missing: true, unmatched: 'leave'}}}};
+// Collect category map + per-video overrides from the category cards.
+function buildCategory(){{
   const cmap = {{}}, overrides = {{}};
   document.querySelectorAll('section.cat').forEach(function(sec){{
     const cid = sec.getAttribute('data-cat');
@@ -2315,9 +2363,21 @@ function buildConfig(){{
     const ov = catOverrides(sec).overrides;
     for (const k in ov) overrides[k] = ov[k];
   }});
-  const classify = {{mode: 'category', create_missing: true,
-                     unmatched: 'leave', category_map: cmap}};
-  if (Object.keys(overrides).length) classify.video_overrides = overrides;
+  return {{ cmap: cmap, overrides: overrides }};
+}}
+
+function buildConfig(){{
+  if (TIER === 'keyword')
+    return {{classify: {{mode: 'keyword', create_missing: true, unmatched: 'leave'}}}};
+  const cat = buildCategory();
+  const mode = (TIER === 'both') ? 'cascade' : 'category';
+  const classify = {{mode: mode, create_missing: true,
+                     unmatched: 'leave', category_map: cat.cmap}};
+  if (Object.keys(cat.overrides).length) classify.video_overrides = cat.overrides;
+  if (TIER === 'both') {{
+    const kw = buildRules().keyword_rules;
+    if (kw.length) classify.keyword_rules = kw;   // embedded -> self-contained
+  }}
   return {{classify: classify}};
 }}
 
@@ -2336,34 +2396,104 @@ function buildRules(){{
   return {{ keyword_rules: rules }};
 }}
 
-function refreshTally(){{
-  const creates = new Set();
-  if (TIER === 'keyword') {{
-    let kws = 0;
-    const kmap = {{}};
-    buildRules().keyword_rules.forEach(function(r){{ kmap[r.any[0]] = r.playlist; }});
-    document.querySelectorAll('section.kw').forEach(function(sec){{
-      const kw = sec.getAttribute('data-kw');
-      const st = sec.querySelector('.status');
-      const cnt = parseInt(sec.getAttribute('data-count'), 10) || 0;
-      if (Object.prototype.hasOwnProperty.call(kmap, kw)) {{
-        const name = kmap[kw]; kws++;
-        const willCreate = !OWNED_SET.has(name);
-        if (willCreate) creates.add(name);
-        st.textContent = '\u2192 ~' + cnt + ' match(es) into "' + name + '"' +
-          (willCreate ? '  (would create)' : '');
-        st.className = 'status ok';
-      }} else {{
-        st.textContent = 'skipped (no rule)';
-        st.className = 'status';
-      }}
-    }});
-    document.getElementById('tally').textContent =
-      kws + ' keyword rule' + (kws === 1 ? '' : 's') + ' \u00b7 ' +
-      creates.size + ' new playlist(s)';
-    return;
-  }}
-  const cmap = buildConfig().classify.category_map;
+// --- manual keyword entry (combined "both" page) ---
+function _pickSelect(){{
+  const sel = document.createElement('select');
+  sel.className = 'pick';
+  sel.addEventListener('change', function(){{ onPick(sel); }});
+  function opt(val, txt){{ const o = document.createElement('option');
+    if (val !== null) o.value = val; o.textContent = txt; return o; }}
+  sel.appendChild(opt('__skip__', '\u2014 skip (remove rule) \u2014'));
+  OWNED.forEach(function(n){{ sel.appendChild(opt(null, n)); }});
+  sel.appendChild(opt('__new__', '\uff0b new playlist\u2026'));
+  return sel;
+}}
+
+function onManualTarget(){{
+  const t = document.getElementById('mkwt');
+  const nn = document.getElementById('mkwnew');
+  nn.hidden = (t.value !== '__new__');
+  if (!nn.hidden) nn.focus();
+}}
+
+function addKeyword(){{
+  const kwIn = document.getElementById('mkw');
+  const tSel = document.getElementById('mkwt');
+  const nIn = document.getElementById('mkwnew');
+  const kw = kwIn.value.trim();
+  let target = tSel.value;
+  if (target === '__new__') target = nIn.value.trim();
+  if (!kw) {{ alert('Type a keyword or phrase first.'); return; }}
+  if (!target || target === '__skip__') {{ alert('Pick a playlist for this keyword.'); return; }}
+
+  const sec = document.createElement('section');
+  sec.className = 'kw manual';
+  sec.setAttribute('data-kw', kw);
+  sec.setAttribute('data-count', '0');
+  sec.setAttribute('data-manual', '1');
+
+  const head = document.createElement('div'); head.className = 'cathead';
+  const nameWrap = document.createElement('div'); nameWrap.className = 'catname';
+  const tag = document.createElement('span'); tag.className = 'kwtag'; tag.textContent = 'manual';
+  nameWrap.appendChild(tag);
+  nameWrap.appendChild(document.createTextNode(' ' + kw));
+  head.appendChild(nameWrap);
+
+  const pw = document.createElement('div'); pw.className = 'pickwrap';
+  const lbl = document.createElement('label'); lbl.innerHTML = 'Videos matching &rarr;';
+  const sel = _pickSelect();
+  const nn = document.createElement('input'); nn.type = 'text'; nn.className = 'newname';
+  nn.placeholder = 'New playlist name'; nn.hidden = true;
+  nn.addEventListener('input', refreshTally);
+  // preset the picked target
+  if (OWNED_SET.has(target)) {{ sel.value = target; }}
+  else {{ sel.value = '__new__'; nn.hidden = false; nn.value = target; }}
+  pw.appendChild(lbl); pw.appendChild(sel); pw.appendChild(nn);
+  head.appendChild(pw);
+
+  const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'rmkw';
+  rm.textContent = '\u00d7 remove';
+  rm.addEventListener('click', function(){{ sec.remove(); refreshTally(); }});
+  head.appendChild(rm);
+
+  const st = document.createElement('div'); st.className = 'status';
+  sec.appendChild(head); sec.appendChild(st);
+  document.getElementById('kwlist').appendChild(sec);
+
+  kwIn.value = ''; nIn.value = ''; nIn.hidden = true; tSel.value = '__skip__';
+  refreshTally();
+}}
+
+// Update every keyword card's status; returns the number of active rules.
+function kwTally(creates){{
+  const kmap = {{}};
+  buildRules().keyword_rules.forEach(function(r){{ kmap[r.any[0]] = r.playlist; }});
+  let kws = 0;
+  document.querySelectorAll('section.kw').forEach(function(sec){{
+    const kw = sec.getAttribute('data-kw');
+    const st = sec.querySelector('.status');
+    const cnt = parseInt(sec.getAttribute('data-count'), 10) || 0;
+    const manual = sec.getAttribute('data-manual') === '1';
+    if (Object.prototype.hasOwnProperty.call(kmap, kw)) {{
+      const name = kmap[kw]; kws++;
+      const willCreate = !OWNED_SET.has(name);
+      if (willCreate) creates.add(name);
+      st.textContent = (manual
+          ? '\u2192 "' + name + '" (manual rule)'
+          : '\u2192 ~' + cnt + ' match(es) into "' + name + '"') +
+        (willCreate ? '  (would create)' : '');
+      st.className = 'status ok';
+    }} else {{
+      st.textContent = manual ? 'no playlist (removed)' : 'skipped (no rule)';
+      st.className = 'status';
+    }}
+  }});
+  return kws;
+}}
+
+// Update every category card's status; returns {{cats, vids, ovTotal}}.
+function catTally(creates){{
+  const cmap = buildCategory().cmap;
   let cats = 0, vids = 0, ovTotal = 0;
   document.querySelectorAll('section.cat').forEach(function(sec){{
     const cid = sec.getAttribute('data-cat');
@@ -2392,9 +2522,26 @@ function refreshTally(){{
       st.className = co.count ? 'status ok' : 'status';
     }}
   }});
-  let msg = cats + ' categor' + (cats === 1 ? 'y' : 'ies') + ' mapped';
-  if (ovTotal) msg += ' \u00b7 ' + ovTotal + ' video override' + (ovTotal === 1 ? '' : 's');
-  msg += ' \u00b7 ' + vids + ' categorized video(s) \u00b7 ' +
+  return {{ cats: cats, vids: vids, ovTotal: ovTotal }};
+}}
+
+function refreshTally(){{
+  const creates = new Set();
+  if (TIER === 'keyword') {{
+    const kws = kwTally(creates);
+    document.getElementById('tally').textContent =
+      kws + ' keyword rule' + (kws === 1 ? '' : 's') + ' \u00b7 ' +
+      creates.size + ' new playlist(s)';
+    return;
+  }}
+  const c = catTally(creates);
+  let msg = c.cats + ' categor' + (c.cats === 1 ? 'y' : 'ies') + ' mapped';
+  if (c.ovTotal) msg += ' \u00b7 ' + c.ovTotal + ' video override' + (c.ovTotal === 1 ? '' : 's');
+  if (TIER === 'both') {{
+    const kws = kwTally(creates);
+    if (kws) msg += ' \u00b7 ' + kws + ' keyword rule' + (kws === 1 ? '' : 's');
+  }}
+  msg += ' \u00b7 ' + c.vids + ' categorized video(s) \u00b7 ' +
     creates.size + ' new playlist(s)';
   document.getElementById('tally').textContent = msg;
 }}
@@ -2420,11 +2567,14 @@ function downloadAll(){{
     return;
   }}
   const cfg = buildConfig();
-  const hasCats = Object.keys(cfg.classify.category_map).length > 0;
-  const hasOv = cfg.classify.video_overrides &&
-                Object.keys(cfg.classify.video_overrides).length > 0;
-  if (!hasCats && !hasOv) {{
-    alert('Map at least one category or video to a playlist first.');
+  const cl = cfg.classify;
+  const hasCats = Object.keys(cl.category_map).length > 0;
+  const hasOv = cl.video_overrides && Object.keys(cl.video_overrides).length > 0;
+  const hasKw = cl.keyword_rules && cl.keyword_rules.length > 0;
+  if (!hasCats && !hasOv && !hasKw) {{
+    alert(TIER === 'both'
+      ? 'Map at least one category, video, or keyword to a playlist first.'
+      : 'Map at least one category or video to a playlist first.');
     return;
   }}
   _dl('config.json', cfg);
@@ -2441,17 +2591,19 @@ refreshTally();
 
 def _scan_and_render_map(youtube, owned, source_id: str, source_title: str,
                          html_out: str, json_out: str | None = None,
-                         tier: str = "category") -> str | None:
+                         tier: str = "both") -> str | None:
     """Scan ``source_id``'s real videos, group them by their YouTube category,
     and write the interactive offline map page. ``tier`` selects which page:
 
-      "category" (Tier 1, the default) -> only the category cards + per-video
-        overrides; the downloaded config.json runs in mode:"category".
-      "keyword"  (Tier 2) -> only content-derived keyword-rule candidates
-        (channels + title words); downloads rules.json + a keyword-mode config.
+      "both" (DEFAULT, combined) -> category cards + per-video overrides AND an
+        optional keyword section (auto candidates + manual add); downloads one
+        self-contained config.json (mode:"cascade", keyword rules embedded).
+      "category" (advanced) -> only the category cards; config.json mode:"category".
+      "keyword"  (advanced) -> only content-derived keyword-rule candidates;
+        downloads rules.json + a keyword-mode config.
 
     Returns the HTML path written, or ``None`` if nothing was categorizable.
-    Shared by ``map`` and ``setup [2]``/``[3]``."""
+    Shared by ``map`` and the ``setup`` map option."""
     items = fetch_playlist_items(youtube, source_id)
     print(f"Scanned {len(items)} item(s). Fetching video categories...")
     meta = fetch_video_metadata(youtube, [it["video_id"] for it in items])
@@ -2472,7 +2624,7 @@ def _scan_and_render_map(youtube, owned, source_id: str, source_title: str,
             "channel": m.get("channel", ""),
         })
 
-    if not groups:
+    if not groups and tier == "category":
         print("\nNo categorizable videos found (all unavailable, or none carry a "
               "YouTube category). Nothing to map.")
         return None
@@ -2480,11 +2632,16 @@ def _scan_and_render_map(youtube, owned, source_id: str, source_title: str,
     # Don't offer the source playlist itself as a target.
     owned_titles = [p["title"] for p in owned if p["id"] != source_id]
 
-    # Keyword candidates are only relevant for the Tier-2 (keyword) page.
+    # Keyword candidates power the keyword page and the combined page.
     kw = (_extract_keyword_candidates(items, meta)
-          if tier == "keyword" else {"channels": [], "terms": []})
+          if tier in ("keyword", "both") else {"channels": [], "terms": []})
 
-    if tier == "category":
+    if not groups and not (kw["channels"] or kw["terms"]) and tier != "category":
+        print("\nNo categorizable videos and no keyword candidates found. "
+              "Nothing to map.")
+        return None
+
+    if tier in ("category", "both"):
         print("\nCategories in your saved videos (largest first):")
         for cid, vids in sorted(groups.items(),
                                 key=lambda kv: len(kv[1]), reverse=True):
@@ -2492,12 +2649,16 @@ def _scan_and_render_map(youtube, owned, source_id: str, source_title: str,
             print(f"  {len(vids):>4}  {name}")
         if uncategorized:
             print(f"  {uncategorized:>4}  (no category / unavailable -- not mappable)")
-    else:
+    if tier in ("keyword", "both"):
         if kw["channels"] or kw["terms"]:
             print(f"\nKeyword-rule candidates from your own videos: "
                   f"{len(kw['channels'])} channel(s), {len(kw['terms'])} title word(s). "
+                  "Mapping any (or adding your own) writes an optional keyword rule."
+                  if tier == "both" else
+                  f"\nKeyword-rule candidates from your own videos: "
+                  f"{len(kw['channels'])} channel(s), {len(kw['terms'])} title word(s). "
                   "Map any on the page to write a keyword rule.")
-        else:
+        elif tier == "keyword":
             print("\nNo strong keyword candidates found (no channel with 2+ saved "
                   "videos and no frequent title words). You can still hand-write "
                   "rules.json -- see rules.example.json.")
@@ -2527,9 +2688,10 @@ def _scan_and_render_map(youtube, owned, source_id: str, source_title: str,
 
 def cmd_map(args) -> None:
     """Scan a source playlist and write an interactive HTML page mapping the
-    user's saved videos to their playlists. ``--tier category`` (default) maps
-    YouTube categories (+ per-video overrides); ``--tier keyword`` mines
-    content-derived keyword rules. The two tiers are kept separate on purpose."""
+    user's saved videos to their playlists. ``--tier both`` (default) is the
+    combined page: category map + per-video overrides + an optional keyword
+    section, downloading one self-contained config.json. ``--tier category`` or
+    ``--tier keyword`` write the advanced single-tier variants."""
     youtube = get_service()
     owned = fetch_playlists(youtube)
 
@@ -2544,11 +2706,14 @@ def cmd_map(args) -> None:
             "Run 'python youtube_cleaner.py playlists' to see valid IDs."
         )
 
-    tier = getattr(args, "tier", "category") or "category"
+    tier = getattr(args, "tier", "both") or "both"
+    tier_desc = {"both": "category map + per-video overrides + optional keywords",
+                 "category": "category map + per-video overrides",
+                 "keyword": "keyword rules"}.get(tier, tier)
     print(f"\nSource : {source['title']}  ({args.source})")
-    print(f"Tier   : {tier}  "
-          f"({'category map + per-video overrides' if tier == 'category' else 'keyword rules'})")
-    default_out = "category-map.html" if tier == "category" else "keyword-map.html"
+    print(f"Tier   : {tier}  ({tier_desc})")
+    default_out = {"both": "map.html", "category": "category-map.html",
+                   "keyword": "keyword-map.html"}.get(tier, "map.html")
     out = args.html or default_out
     written = _scan_and_render_map(youtube, owned, args.source, source["title"],
                                    out, json_out=getattr(args, "json", None),
@@ -2556,7 +2721,12 @@ def cmd_map(args) -> None:
     if not written:
         return
     print(f"\nInteractive map page written to {written}")
-    if tier == "category":
+    if tier == "both":
+        print("  Open it, map each category to a playlist (expand a category to")
+        print("  override individual videos), optionally add keyword rules, then")
+        print("  Download config.json next to youtube_cleaner.py and preview:")
+        print(f"    python youtube_cleaner.py sort --source {args.source}")
+    elif tier == "category":
         print("  Open it, map each category to a playlist (expand a category to")
         print("  override individual videos), then Download config.json next to")
         print("  youtube_cleaner.py and preview the sort:")
@@ -2571,6 +2741,7 @@ def cmd_sort(args) -> None:
     youtube = get_service()
     rules = load_rules()
     config = load_config()
+    rules = _effective_rules(rules, config)
     mode = getattr(args, "mode", None) or config.get("classify", {}).get("mode") or "cascade"
     create_missing = config.get("classify", {}).get("create_missing", True)
 
@@ -2924,6 +3095,7 @@ def cmd_autosort(args) -> None:
     youtube = get_service()
     rules = load_rules()
     config = load_config()
+    rules = _effective_rules(rules, config)
     mode = config.get("classify", {}).get("mode") or "cascade"
     create_missing = config.get("classify", {}).get("create_missing", True)
     owned = fetch_playlists(youtube)
@@ -3168,18 +3340,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     mp = sub.add_parser("map", help="Scan a source playlist and write an interactive HTML "
                                     "page to map your saved videos to your playlists. "
-                                    "--tier category (default) maps YouTube categories + "
-                                    "per-video overrides; --tier keyword mines keyword rules.")
+                                    "--tier both (default) = category map + per-video "
+                                    "overrides + optional keyword rules in one config.json.")
     mp.add_argument("--source", required=True,
                     help="Source playlist ID to analyze (e.g. Favorites, or an 'Unsorted' "
                          "playlist).")
-    mp.add_argument("--tier", choices=["category", "keyword"], default="category",
-                    help="Which map to build: 'category' (Tier 1, default) = category map "
-                         "+ per-video overrides -> config.json (mode category); 'keyword' "
-                         "(Tier 2) = keyword rules -> rules.json + config.json (mode keyword). "
-                         "The tiers are kept separate on purpose.")
+    mp.add_argument("--tier", choices=["both", "category", "keyword"], default="both",
+                    help="Which map to build: 'both' (default) = category map + per-video "
+                         "overrides + an optional keyword section -> one self-contained "
+                         "config.json (mode cascade, keyword rules embedded). Advanced: "
+                         "'category' = category only (mode category); 'keyword' = keyword "
+                         "rules only -> rules.json + config.json (mode keyword).")
     mp.add_argument("--html", metavar="PATH", default=None,
-                    help="Output HTML path (default: category-map.html / keyword-map.html).")
+                    help="Output HTML path (default: map.html / category-map.html / "
+                         "keyword-map.html depending on --tier).")
     mp.add_argument("--json", metavar="PATH", default=None,
                     help="Also dump the scan (counts + video lists + keyword candidates) to "
                          "this JSON file.")

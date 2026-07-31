@@ -14,6 +14,14 @@ rules.json
 # Generated artifacts (sort previews, plan dumps — contain your video titles)
 output/
 
+# Generated interactive pages written next to the script (contain your video
+# titles). `sort --html` writes plan.html; `map`/`setup [2]` writes map.html
+# (plus the advanced category-map.html / keyword-map.html variants).
+map.html
+plan.html
+category-map.html
+keyword-map.html
+
 # Generated console-paste page (rebuild with `node tools/build-console-page.cjs`)
 watchlater-console.html
 
