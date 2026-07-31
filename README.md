@@ -72,11 +72,11 @@ python youtube_cleaner.py playlists
 # Choose how videos get sorted (writes config.json). See "Classifier" below.
 python youtube_cleaner.py setup
 
-# Prefer to map by eye? Scan a playlist's REAL videos, see which YouTube
-# categories they fall under (with sample titles), and map each category to one of
-# your playlists on an offline HTML page — then Download config.json.
-# Use this ONLY if you sort by category (Tier 1 / `sort --mode category`);
-# it does not affect keyword rules (Tier 2) or AI (Tier 3).
+# Prefer to map by eye? Scan a playlist's REAL videos and build an offline page with
+# TWO sections: (1) the YouTube categories they fall under -> map each to a playlist
+# (Tier 1), and (2) content-derived keyword rules from YOUR channels + title words
+# (Tier 2) that override the category. Download config.json + rules.json, then just
+# run `sort` (cascade). No hand-written starter buckets needed.
 python youtube_cleaner.py map --source PLxxxxxxxx --html category-map.html
 
 # Note: We need to provide the playlist id and not the playlist name
@@ -177,9 +177,9 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 
 | Option        | Meaning                                                                     |
 |---------------|-----------------------------------------------------------------------------|
-| `--source`    | Playlist ID whose real videos are scanned and grouped by YouTube category. **Required.** |
-| `--html PATH` | Write the offline interactive category-map page (default `category-map.html`). Map each present category → your playlist, then **Download config.json**. |
-| `--json PATH` | Also dump the grouped scan (categories + video titles) to JSON. |
+| `--source`    | Playlist ID whose real videos are scanned — grouped by YouTube category **and** mined for content-derived keyword candidates. **Required.** |
+| `--html PATH` | Write the offline interactive map page (default `category-map.html`): category → playlist (Tier 1) **plus** keyword rules from your channels/title words (Tier 2). **Download config.json + rules.json**. |
+| `--json PATH` | Also dump the grouped scan (categories + titles) and the keyword candidates to JSON. |
 
 Read-only — `map` never moves or deletes anything; it only writes the page/JSON. See
 **Category map** under the Classifier section for the full workflow.
@@ -344,7 +344,7 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 | `ai.batch_size` | Videos classified per request (default `50`, 1–200). AI batches titles so it makes a few requests instead of one per video — cheaper and much faster. Smaller = safer; larger saves little extra. |
 | `ai.abstain` | Recall vs precision knob: `high` (only files on a clear match — fewest moves), `normal` (best-fit; leaves a video only when no playlist is a reasonable home — **default**), `low` (takes the best match unless truly unrelated — most moves). Turn **up** if you see wrong guesses; turn **down** if too many videos are left unsorted. |
 
-### Category map (`map` command) — Tier 1, mapped by eye from your real videos
+### Category map (`map` command) — Tier 1 + content-derived Tier 2, by eye
 
 `setup → [2]` maps YouTube categories to your playlists at a text prompt, but you may
 not know which of **your** saved videos actually fall under "Science & Technology" or
@@ -354,35 +354,54 @@ not know which of **your** saved videos actually fall under "Science & Technolog
 python youtube_cleaner.py map --source PLxxxxxxxx --html category-map.html
 ```
 
-It scans the **real videos** in `--source`, groups them by the category YouTube
-assigned each one, and writes a self-contained **offline** HTML page (same look as the
-`sort --html` review page). The page shows **only the categories present in your
-videos** — largest first, each with sample titles — and a dropdown per category to pick
-one of your playlists, type a new name, or skip. Click **Download config.json**, drop
-the file next to `youtube_cleaner.py`, then preview the sort:
+It scans the **real videos** in `--source` and builds one self-contained **offline**
+page (same look as the `sort --html` review page) with **two** sections:
+
+- **Categories** (Tier 1): the videos grouped by the category YouTube assigned each one
+  — **only the categories present in your videos**, largest first, each with sample
+  titles and a dropdown to pick a playlist, type a new name, or skip.
+- **Keyword rules** (Tier 2, *content-derived*): the **channels** you saved 2+ videos
+  from and the **frequent words** in your own titles — each with example videos and the
+  same dropdown. Mapping one writes a keyword rule that runs **before** the category map,
+  so it overrides the category for those videos (e.g. *everything from "TechWorld with
+  Nana" → Programming*, or *every title containing `aws` → Cloud*). This replaces the old
+  generic starter buckets with suggestions mined from **your** account.
+
+Click **Download config.json + rules.json**, drop both next to `youtube_cleaner.py`,
+then preview the sort:
 
 ```powershell
-python youtube_cleaner.py sort --source PLxxxxxxxx --mode category
+python youtube_cleaner.py sort --source PLxxxxxxxx
 ```
 
+Plain `sort` runs the **cascade** (`keyword rule → AI → category map → leave`), so your
+keyword rules win first and the category map catches everything else. The downloaded
+`config.json` already sets `"mode": "cascade"`; it's safe even with no keyword/AI
+configured — it simply falls through to the category map. (Force one layer with
+`sort --mode category` if you ever want the category map alone.)
+
 Notes: it lists **your** playlists as targets (the source is excluded); videos YouTube
-left un-categorized are counted but can't be mapped (no category to key on); the page
-runs client-side — nothing leaves your browser. Add `--json map.json` to also dump the
-grouped scan.
+left un-categorized are counted but can't be category-mapped (no category to key on) —
+they can still be caught by a keyword rule; the page runs client-side — nothing leaves
+your browser; download only the file(s) you actually mapped (category-only → just
+`config.json`; keyword-only → just `rules.json`). Add `--json map.json` to also dump the
+grouped scan plus the keyword candidates.
 
-**Applies to Tier 1 only.** `map` sets `category_map`, which is used only when you sort
-**by category** (`sort --mode category`, or the `category` step of the default cascade).
-It has **no effect on keyword rules (Tier 2) or AI (Tier 3)** — those are configured
-separately (`setup → [3]`/`rules.json` for keyword, `setup → [4]` for AI). So run `map`
-only if you intend to sort by YouTube category.
+### Keyword rules (Tier 2) — content-derived page, or map starter buckets
 
-### Keyword rules (Tier 2) — map starter buckets to your playlists
+There are now **two** ways to build Tier 2, depending on how hands-on you want to be:
+
+- **Content-derived (easiest):** the **`map` command** above mines your own channels
+  and title words and writes a ready `rules.json` from a point-and-click page — no
+  starter list, no hand-editing required.
+- **Starter buckets (`setup → [3]`):** a text-prompt mapper for when you'd rather start
+  from a generic topic list than from your content (described below).
 
 Unlike Tier 0/1 (bound to YouTube's categories) and Tier 3 (grounded on your real
 playlists), **keyword rules are inherently manual** — a rule is hand-written human
-intent (*"if the title says `django`, file it under Programming"*), so there's
-nothing to auto-detect. That's the trade-off: Tier 2 is the **offline, no-API-key,
-fully deterministic, free** power-user layer, but you tell it what to do.
+intent (*"if the title says `django`, file it under Programming"*). The `map` page just
+gives you a strong, content-based **starting set** you can accept or trim; either way
+Tier 2 stays the **offline, no-API-key, fully deterministic, free** power-user layer.
 
 To make it usable out of the box, `setup → [3]` runs an **interactive mapper**: it
 loads 9 generic starter buckets (Programming, AI & ML, Finance & Investing, Health
