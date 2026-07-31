@@ -504,10 +504,17 @@ def _effective_rules(rules: dict, config: dict) -> dict:
     When the key is absent, behaviour is unchanged: rules.json (or DEFAULT_RULES)
     is used, so existing power-user setups keep working.
     """
-    kw = (config.get("classify") or {}).get("keyword_rules")
+    cls = config.get("classify") or {}
+    kw = cls.get("keyword_rules")
     if kw is None:
         return rules
-    return {"keyword_rules": kw, "default_playlist": rules.get("default_playlist")}
+    # keyword_rules is authoritative -> so is the unmatched fallback. Take the
+    # "collect leftovers" playlist from the CONFIG (unmatched), NOT from the
+    # built-in DEFAULT_RULES.default_playlist ("Unsorted"). "leave"/None means no
+    # catch-all, so the heads-up won't wrongly list an "Unsorted" target either.
+    unmatched = cls.get("unmatched", "leave")
+    default_pl = None if unmatched in (None, "leave") else unmatched
+    return {"keyword_rules": kw, "default_playlist": default_pl}
 
 
 def fetch_video_metadata(youtube, video_ids: list[str]) -> dict[str, dict]:
@@ -1524,7 +1531,13 @@ def cmd_setup(args) -> None:
         if choice not in {"1", "2", "3"}:
             print("    Please enter 1, 2, or 3.")
 
-    cfg: dict = {"mode": "cascade", "create_missing": True, "unmatched": "leave"}
+    # keyword_rules is written as an AUTHORITATIVE empty list so the built-in
+    # DEFAULT_RULES keyword rules (Investing & Stocks / Travel & Tourism / ...)
+    # never fire silently in cascade. The combined "Map by eye" page ([2]) is the
+    # only flow that adds real keyword rules; it writes its own config and returns
+    # before this dict is saved, so [1] (category) and [3] (AI) both stay clean.
+    cfg: dict = {"mode": "cascade", "create_missing": True, "unmatched": "leave",
+                 "keyword_rules": []}
 
     if choice == "1":
         cfg["mode"] = "category"
