@@ -313,8 +313,8 @@ video and the first hit wins. You never pick a tier per video.
 | Tier | Name | Setup | What it does |
 |------|------|-------|--------------|
 | **0** | Category (universal) | zero-config | Sorts by YouTube's own `categoryId` (Music, Gaming, Education…) into auto-named playlists. Works for anyone. |
-| **1** | Category → **my** playlists | `setup` → `[2]`, or `map` (visual) | Maps each YouTube category to one of **your** existing playlist names. **Recommended.** |
-| **2** | Keyword rules | `setup` → `[3]` (maps starter buckets to **your** playlists), then edit `rules.json` | Substring match on title + channel. See `rules.example.json`. Advanced/personal — see note below. |
+| **1** | Category → **my** playlists | `setup` → `[2]`, or `map` (both scan your real videos) | Maps the categories you **actually have** to one of **your** playlist names, on the offline page. **Recommended.** |
+| **2** | Keyword rules | `setup` → `[3]`, or `map` (both scan your real videos) | Suggests keyword rules from **your** channels & title words on the offline page → `rules.json`. Substring match on title + channel; see `rules.example.json`. |
 | **3** | AI classify | `setup` → `[4]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
 
 **Cascade priority:** `keyword rule → AI → category map → leave in place`.
@@ -346,9 +346,11 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 
 ### Category map (`map` command) — Tier 1 + content-derived Tier 2, by eye
 
-`setup → [2]` maps YouTube categories to your playlists at a text prompt, but you may
-not know which of **your** saved videos actually fall under "Science & Technology" or
-"People & Blogs" — so the mapping is a guess. The `map` command removes that guesswork:
+Both `setup → [2]` / `setup → [3]` and the `map` command now run the **same**
+content-derived flow: they scan a playlist you pick and show only the categories you
+**actually have** (plus keyword suggestions from your own channels & titles), so you
+never guess which of your videos fall under "Science & Technology". `map` is just the
+direct entry point:
 
 ```powershell
 python youtube_cleaner.py map --source PLxxxxxxxx --html category-map.html
@@ -387,34 +389,25 @@ your browser; download only the file(s) you actually mapped (category-only → j
 `config.json`; keyword-only → just `rules.json`). Add `--json map.json` to also dump the
 grouped scan plus the keyword candidates.
 
-### Keyword rules (Tier 2) — content-derived page, or map starter buckets
+### Keyword rules (Tier 2) — content-derived from your own videos
 
-There are now **two** ways to build Tier 2, depending on how hands-on you want to be:
+Both `setup → [3]` and the **`map` command** build Tier 2 the same way: they scan a
+playlist you pick, mine the **channels you save 2+ videos from** and the **frequent
+words in your titles**, and let you map any of them to a playlist on the offline page.
+Download the resulting `rules.json` next to `youtube_cleaner.py` — no generic starter
+list, no hand-editing required to get started.
 
-- **Content-derived (easiest):** the **`map` command** above mines your own channels
-  and title words and writes a ready `rules.json` from a point-and-click page — no
-  starter list, no hand-editing required.
-- **Starter buckets (`setup → [3]`):** a text-prompt mapper for when you'd rather start
-  from a generic topic list than from your content (described below).
+A keyword rule is still ultimately **human intent** (*"everything from this channel →
+Programming"*, *"any title with `django` → Web"*), so the page gives you a strong,
+content-based **starting set** you can accept or trim. Either way Tier 2 stays the
+**offline, no-API-key, fully deterministic, free** power-user layer. Edit `rules.json`
+by hand afterward to add your own keywords/targets; see `rules.example.json` for the
+full format and priority notes.
 
-Unlike Tier 0/1 (bound to YouTube's categories) and Tier 3 (grounded on your real
-playlists), **keyword rules are inherently manual** — a rule is hand-written human
-intent (*"if the title says `django`, file it under Programming"*). The `map` page just
-gives you a strong, content-based **starting set** you can accept or trim; either way
-Tier 2 stays the **offline, no-API-key, fully deterministic, free** power-user layer.
-
-To make it usable out of the box, `setup → [3]` runs an **interactive mapper**: it
-loads 9 generic starter buckets (Programming, AI & ML, Finance & Investing, Health
-& Fitness, Travel, Cooking, Tech & Gadgets, Gaming, Music) from `rules.example.json`
-and, showing **your** real playlists, lets you point each bucket at an existing
-playlist (`#`), type a new name, keep the suggested name (Enter), or skip (`-`). It
-writes a `rules.json` bound to your account (with a `y/N` guard before overwriting
-an existing one). Edit `rules.json` afterward to add your own keywords/targets.
-
-**Load-time heads-up:** because rule targets are fixed **names** (not bound to your
-account), every keyword/cascade run first prints which targets don't exist yet —
-either *"WILL be created on first match"* (`create_missing: true`) or *"will be
-SKIPPED"* (`false`) — so a copied `rules.example.json` never surprises you.
+**Load-time heads-up:** because rule targets are **names** (not bound to your account),
+every keyword/cascade run first prints which targets don't exist yet — either *"WILL be
+created on first match"* (`create_missing: true`) or *"will be SKIPPED"* (`false`) — so a
+copied `rules.example.json` never surprises you.
 
 ### AI (Tier 3) — bring your own key or run local
 

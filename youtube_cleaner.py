@@ -1455,79 +1455,17 @@ def _prompt(msg: str, default: str = "") -> str:
         return default
 
 
-def _load_starter_buckets() -> list[dict]:
-    """Return the shipped starter keyword buckets (rules.example.json), or a tiny
-    built-in fallback if that file is missing/unreadable."""
-    try:
-        with open(RULES_EXAMPLE_FILE, encoding="utf-8") as fh:
-            buckets = json.load(fh).get("keyword_rules") or []
-        if buckets:
-            return buckets
-    except (OSError, json.JSONDecodeError):
-        pass
-    return [
-        {"playlist": "Music", "any": ["official music video", "lyric video", "full song"]},
-        {"playlist": "Tech & Gadgets", "any": ["unboxing", "tech review", "gadget"]},
-        {"playlist": "Health & Fitness", "any": ["workout", "gym", "fitness"]},
-    ]
-
-
-def _setup_keyword_rules(owned: list[dict]) -> None:
-    """Interactively map each starter keyword bucket to ONE of the user's real
-    playlists (or a new name, or skip), then write rules.json. Mirrors the Tier-1
-    category mapping so keyword targets aren't hardcoded guesses for strangers."""
-    if os.path.exists(RULES_FILE):
-        ans = _prompt(f"  {RULES_FILE} already exists -- overwrite it? [y/N]: ").strip().lower()
-        if ans not in ("y", "yes"):
-            print("  Keeping your existing rules.json unchanged. Edit it by hand to refine.")
-            return
-
-    buckets = _load_starter_buckets()
-    print("\nMap each starter topic to ONE of your playlists so rules point at names")
-    print("that exist in YOUR account. For each topic enter a playlist NUMBER, type a")
-    print("NEW name, press Enter to keep the suggested name, or type '-' to skip it.\n")
-    for i, p in enumerate(owned, 1):
-        print(f"    {i:>2}. {p['title']}")
-    print()
-
-    owned_titles = {p["title"] for p in owned}
-    rules_out: list[dict] = []
-    for b in buckets:
-        suggested = b.get("playlist", "")
-        kws = b.get("any", [])
-        ans = _prompt(f'  "{suggested}"  -> #, new name, Enter to keep, - to skip: ').strip()
-        if ans == "-":
-            continue
-        if not ans:
-            target = suggested
-        elif ans.isdigit() and 1 <= int(ans) <= len(owned):
-            target = owned[int(ans) - 1]["title"]
-        else:
-            target = ans
-        rules_out.append({"playlist": target, "any": kws})
-
-    payload = {"keyword_rules": rules_out, "category_map": {}, "default_playlist": None}
-    with open(RULES_FILE, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, ensure_ascii=False, indent=2)
-    print(f"\n  Saved {RULES_FILE} with {len(rules_out)} rule(s).")
-    if not rules_out:
-        print("  (empty rule set -- edit rules.json to add keyword -> playlist rules.)")
-        return
-    would_create = [r["playlist"] for r in rules_out if r["playlist"] not in owned_titles]
-    if would_create:
-        print(f"  {len(would_create)} target(s) aren't playlists yet and will be created "
-              "on first match:")
-        for t in dict.fromkeys(would_create):
-            print(f"    - {t}")
-
-
 def cmd_setup(args) -> None:
-    """Interactive first-run wizard: pick a sorting strategy and write config.json.
+    """Interactive first-run wizard: pick a sorting strategy.
 
-    Tier 0  -> sort by YouTube category into auto-named playlists (zero setup).
-    Tier 1  -> map each category to one of YOUR playlists (recommended).
-    Tier 2  -> keyword rules (rules.json).
-    Tier 3  -> AI classify (bring-your-own-key or local Ollama).
+    Tier 0  -> sort by YouTube category into auto-named playlists (zero setup);
+               writes config.json.
+    Tier 1  -> scan a playlist's real videos and map the categories you actually
+               have to YOUR playlists, on the offline map page (downloads
+               config.json). Content-derived, not a blind list.
+    Tier 2  -> same scan; map content-derived keyword rules (your channels/title
+               words) on the page (downloads rules.json).
+    Tier 3  -> AI classify (bring-your-own-key or local Ollama); writes config.json.
     """
     youtube = get_service()
     owned = fetch_playlists(youtube)
@@ -1536,8 +1474,8 @@ def cmd_setup(args) -> None:
     print(f"Found {len(owned)} playlist(s) in your account.\n")
     print("How should videos be sorted? (you can combine these later)")
     print("    [1] By YouTube category      -- zero setup: Music, Gaming, Education...")
-    print("    [2] Map categories to MY playlists   -- recommended")
-    print("    [3] Keyword rules            -- advanced, hand-written (rules.json)")
+    print("    [2] Map categories to MY playlists   -- scans your real videos (recommended)")
+    print("    [3] Keyword rules            -- from your real channels & titles (rules.json)")
     print("    [4] AI                       -- smart; needs a key or local Ollama")
 
     choice = ""
@@ -1556,29 +1494,44 @@ def cmd_setup(args) -> None:
         print("time a video needs one. Run a dry-run first to preview what gets created.\n")
 
     elif choice == "2":
-        cfg["mode"] = "category"
-        print("\nMap each YouTube category to ONE of your playlists.")
-        print("Enter a playlist NUMBER, or type a NEW name to create, or press Enter to skip.\n")
-        for i, p in enumerate(owned, 1):
-            print(f"    {i:>2}. {p['title']}")
-        print()
-        cmap: dict[str, str] = {}
-        for cat_id, cat_name in STANDARD_CATEGORIES.items():
-            ans = _prompt(f'  YouTube "{cat_name}"  -> #, new name, or Enter to skip: ').strip()
-            if not ans:
-                continue
-            if ans.isdigit() and 1 <= int(ans) <= len(owned):
-                cmap[cat_id] = owned[int(ans) - 1]["title"]
-            else:
-                cmap[cat_id] = ans  # new name -> lazily created on first match
-        cfg["category_map"] = cmap
-        print(f"\nMapped {len(cmap)} categor{'y' if len(cmap) == 1 else 'ies'} to your playlists.\n")
+        print("\nMap categories from your ACTUAL saved videos -- not a blind list.")
+        print("Pick a playlist to scan; the page shows only the categories you really")
+        print("have (each with example videos), plus optional keyword suggestions.\n")
+        picked = _pick_source_playlist(owned)
+        if not picked:
+            print("Cancelled -- nothing written.")
+            return
+        src_id, src_title = picked
+        print(f"\nSource : {src_title}  ({src_id})")
+        written = _scan_and_render_map(youtube, owned, src_id, src_title,
+                                       "category-map.html")
+        if written:
+            print(f"\nInteractive map page written to {written}. Open it, map each")
+            print("category to a playlist, then Download config.json (drop it next to")
+            print("youtube_cleaner.py) and preview -- no changes are made:")
+            print(f"    python youtube_cleaner.py sort --source {src_id}")
+        return
 
     elif choice == "3":
-        cfg["mode"] = "keyword"
-        _setup_keyword_rules(owned)
-        print("\nTier 2 enabled: keyword rules (keyword -> playlist). Edit rules.json")
-        print("anytime; see rules.example.json for the full format and priority notes.\n")
+        print("\nKeyword rules built from your ACTUAL videos -- not generic buckets.")
+        print("Pick a playlist to scan; the page suggests keyword rules from the")
+        print("channels you save from and the frequent words in your titles.\n")
+        picked = _pick_source_playlist(owned)
+        if not picked:
+            print("Cancelled -- nothing written.")
+            return
+        src_id, src_title = picked
+        print(f"\nSource : {src_title}  ({src_id})")
+        written = _scan_and_render_map(youtube, owned, src_id, src_title,
+                                       "category-map.html")
+        if written:
+            print(f"\nInteractive map page written to {written}. Scroll to \"Keyword")
+            print("rules\", map the channels/words you want, then Download rules.json")
+            print("(drop it next to youtube_cleaner.py) and preview -- no changes made:")
+            print(f"    python youtube_cleaner.py sort --source {src_id}")
+            print("Edit rules.json afterward to add your own keywords; see "
+                  "rules.example.json.")
+        return
 
     elif choice == "4":
         print("\nTier 3 (AI). The classifier reads each video's title and picks from")
@@ -1630,9 +1583,36 @@ def cmd_setup(args) -> None:
         print("\nAI usage:")
         print("  sort --source <ID>            # cascade: keyword -> AI -> category (AI IS used)")
         print("  sort --source <ID> --mode ai  # force AI-only for this run")
-    if choice == "2":
-        print("\nTip: to map categories from your ACTUAL saved videos (with examples), try:")
-        print("  python youtube_cleaner.py map --source <PLAYLIST_ID> --html mapping.html")
+
+
+def _pick_source_playlist(owned) -> tuple[str, str] | None:
+    """Prompt the user to choose one of their playlists (by number) or paste a
+    playlist ID to scan. Returns (id, title) or None if cancelled/none exist.
+    Shared by the content-derived setup flows for Tier 1 and Tier 2."""
+    if not owned:
+        print("No playlists found in your account to scan.")
+        return None
+    for i, p in enumerate(owned, 1):
+        print(f"    {i:>2}. {p['title']}")
+    print()
+    while True:
+        ans = _prompt("  Playlist NUMBER to scan (or paste a PL... id, "
+                      "Enter to cancel): ").strip()
+        if not ans:
+            return None
+        if ans.isdigit() and 1 <= int(ans) <= len(owned):
+            p = owned[int(ans) - 1]
+            return p["id"], p["title"]
+        sp = special_playlist_name(ans)
+        if sp:
+            _special_playlist_notice(sp, ans)
+            continue
+        match = next((p for p in owned if p["id"] == ans), None)
+        if match:
+            return match["id"], match["title"]
+        if ans.startswith(("PL", "FL", "UU", "LL", "OL")):
+            return ans, ans  # a playlist you can read but that isn't in your list
+        print("    Enter a list number, or paste a playlist ID (starts with PL).")
 
 
 def render_sort_html(source: dict, plan_by_target: dict[str, list[dict]],
@@ -2324,26 +2304,13 @@ refreshTally();
     return len(page)
 
 
-def cmd_map(args) -> None:
-    """Scan a source playlist, group the user's saved videos by their REAL
-    YouTube category, and write an interactive HTML page to map each present
-    category to one of the user's playlists (downloads config.json)."""
-    youtube = get_service()
-    owned = fetch_playlists(youtube)
-
-    special = special_playlist_name(args.source)
-    if special:
-        _special_playlist_notice(special, args.source)
-        return
-    source = next((p for p in owned if p["id"] == args.source), None)
-    if source is None:
-        sys.exit(
-            f"ERROR: source playlist '{args.source}' is not one of your playlists.\n"
-            "Run 'python youtube_cleaner.py playlists' to see valid IDs."
-        )
-
-    print(f"\nSource : {source['title']}  ({args.source})")
-    items = fetch_playlist_items(youtube, args.source)
+def _scan_and_render_map(youtube, owned, source_id: str, source_title: str,
+                         html_out: str, json_out: str | None = None) -> str | None:
+    """Scan ``source_id``'s real videos, group them by their YouTube category,
+    mine content-derived keyword candidates, and write the interactive offline
+    map page (categories + keyword rules). Returns the HTML path written, or
+    ``None`` if nothing was categorizable. Shared by ``map`` and ``setup [2]``."""
+    items = fetch_playlist_items(youtube, source_id)
     print(f"Scanned {len(items)} item(s). Fetching video categories...")
     meta = fetch_video_metadata(youtube, [it["video_id"] for it in items])
     cat_names = fetch_category_names(youtube)
@@ -2366,10 +2333,10 @@ def cmd_map(args) -> None:
     if not groups:
         print("\nNo categorizable videos found (all unavailable, or none carry a "
               "YouTube category). Nothing to map.")
-        return
+        return None
 
     # Don't offer the source playlist itself as a target.
-    owned_titles = [p["title"] for p in owned if p["id"] != args.source]
+    owned_titles = [p["title"] for p in owned if p["id"] != source_id]
 
     kw = _extract_keyword_candidates(items, meta)
 
@@ -2385,9 +2352,9 @@ def cmd_map(args) -> None:
               f"{len(kw['channels'])} channel(s), {len(kw['terms'])} title word(s) "
               "(map any on the page to override the category).")
 
-    if getattr(args, "json", None):
+    if json_out:
         dump = {
-            "source": {"id": args.source, "title": source["title"]},
+            "source": {"id": source_id, "title": source_title},
             "uncategorized": uncategorized,
             "categories": [
                 {"category_id": cid, "name": cat_names.get(cid) or f"Category {cid}",
@@ -2397,15 +2364,41 @@ def cmd_map(args) -> None:
             ],
             "keyword_candidates": kw,
         }
-        with open(args.json, "w", encoding="utf-8") as fh:
+        with open(json_out, "w", encoding="utf-8") as fh:
             json.dump(dump, fh, ensure_ascii=False, indent=2)
-        print(f"\nGrouping written to {args.json}")
+        print(f"\nGrouping written to {json_out}")
 
-    out = args.html or "category-map.html"
-    render_map_html({"id": args.source, "title": source["title"]},
-                    groups, cat_names, owned_titles, uncategorized, out,
+    render_map_html({"id": source_id, "title": source_title},
+                    groups, cat_names, owned_titles, uncategorized, html_out,
                     keyword_candidates=kw)
-    print(f"\nInteractive category-map page written to {out}")
+    return html_out
+
+
+def cmd_map(args) -> None:
+    """Scan a source playlist, group the user's saved videos by their REAL
+    YouTube category (+ mine keyword candidates), and write an interactive HTML
+    page to map categories/keywords to the user's playlists."""
+    youtube = get_service()
+    owned = fetch_playlists(youtube)
+
+    special = special_playlist_name(args.source)
+    if special:
+        _special_playlist_notice(special, args.source)
+        return
+    source = next((p for p in owned if p["id"] == args.source), None)
+    if source is None:
+        sys.exit(
+            f"ERROR: source playlist '{args.source}' is not one of your playlists.\n"
+            "Run 'python youtube_cleaner.py playlists' to see valid IDs."
+        )
+
+    print(f"\nSource : {source['title']}  ({args.source})")
+    out = args.html or "category-map.html"
+    written = _scan_and_render_map(youtube, owned, args.source, source["title"],
+                                   out, json_out=getattr(args, "json", None))
+    if not written:
+        return
+    print(f"\nInteractive category-map page written to {written}")
     print("  Open it, map categories (and optional keyword rules) to playlists,")
     print("  Download config.json + rules.json next to youtube_cleaner.py,")
     print("  then preview the sort (cascade: keyword rules -> category):")
