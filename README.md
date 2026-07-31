@@ -74,7 +74,9 @@ python youtube_cleaner.py setup
 
 # Prefer to map by eye? Scan a playlist's REAL videos, see which YouTube
 # categories they fall under (with sample titles), and map each category to one of
-# your playlists on an offline HTML page — then Download config.json. (Tier 0/1)
+# your playlists on an offline HTML page — then Download config.json.
+# Use this ONLY if you sort by category (Tier 1 / `sort --mode category`);
+# it does not affect keyword rules (Tier 2) or AI (Tier 3).
 python youtube_cleaner.py map --source PLxxxxxxxx --html category-map.html
 
 # Note: We need to provide the playlist id and not the playlist name
@@ -333,7 +335,7 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 | `mode` | `cascade` (default), `category`, `keyword`, or `ai`. `sort --mode` overrides it. |
 | `create_missing` | `true` = create a mapped playlist on first use; `false` = skip + warn. |
 | `unmatched` | `"leave"` (default) or a playlist name to collect everything unmatched. |
-| `category_map` | `{ "<categoryId>": "<your playlist name>" }` — Tier 0/1. |
+| `category_map` | `{ "<categoryId>": "<your playlist name>" }` — the **Tier 1** map (from `setup → [2]` or the `map` command). When absent, Tier 0 falls back to YouTube's standard category names. |
 | `ai.enabled` | `false` by default. `true` turns Tier 3 on. |
 | `ai.provider` | `ollama` (free, local, no key) · `openai` · `anthropic` · `gemini`. |
 | `ai.model` | Model name for that provider (e.g. `llama3.1`, `gpt-4o-mini`). |
@@ -342,7 +344,7 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 | `ai.batch_size` | Videos classified per request (default `50`, 1–200). AI batches titles so it makes a few requests instead of one per video — cheaper and much faster. Smaller = safer; larger saves little extra. |
 | `ai.abstain` | Recall vs precision knob: `high` (only files on a clear match — fewest moves), `normal` (best-fit; leaves a video only when no playlist is a reasonable home — **default**), `low` (takes the best match unless truly unrelated — most moves). Turn **up** if you see wrong guesses; turn **down** if too many videos are left unsorted. |
 
-### Category map (`map` command) — map by eye, from your real videos
+### Category map (`map` command) — Tier 1, mapped by eye from your real videos
 
 `setup → [2]` maps YouTube categories to your playlists at a text prompt, but you may
 not know which of **your** saved videos actually fall under "Science & Technology" or
@@ -366,8 +368,13 @@ python youtube_cleaner.py sort --source PLxxxxxxxx --mode category
 Notes: it lists **your** playlists as targets (the source is excluded); videos YouTube
 left un-categorized are counted but can't be mapped (no category to key on); the page
 runs client-side — nothing leaves your browser. Add `--json map.json` to also dump the
-grouped scan. This is Tier 0/1 — the map only sets `category_map`; keyword/AI layers are
-unaffected.
+grouped scan.
+
+**Applies to Tier 1 only.** `map` sets `category_map`, which is used only when you sort
+**by category** (`sort --mode category`, or the `category` step of the default cascade).
+It has **no effect on keyword rules (Tier 2) or AI (Tier 3)** — those are configured
+separately (`setup → [3]`/`rules.json` for keyword, `setup → [4]` for AI). So run `map`
+only if you intend to sort by YouTube category.
 
 ### Keyword rules (Tier 2) — map starter buckets to your playlists
 
