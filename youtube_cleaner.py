@@ -358,6 +358,49 @@ def _api_execute(build_request, *, what: str = "request", tries: int = 5):
             delay = min(delay * 2, 16.0)
 
 
+def _insert_playlist_item(youtube, playlist_id: str, video_id: str,
+                          tries: int = 5) -> None:
+    """Insert a video into a playlist, retrying transient errors WITHOUT
+    risking a duplicate.
+
+    A plain retry can double-insert: if the server COMMITS the insert but the
+    response is lost to a transient network error, the naive retry adds a second
+    copy. Before each retry we run a videoId-filtered playlistItems.list (1 unit)
+    against the TARGET; if the video is already there, the insert landed and we
+    stop -- no duplicate. The extra list call only happens on the rare retry
+    path, never on the happy path.
+    """
+    delay = 1.0
+    for attempt in range(1, tries + 1):
+        try:
+            youtube.playlistItems().insert(
+                part="snippet",
+                body={"snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }},
+            ).execute()
+            return
+        except HttpError as exc:
+            reason = _http_reason(exc)
+            status = getattr(exc.resp, "status", None)
+            transient = status in TRANSIENT_STATUSES or reason in TRANSIENT_REASONS
+            if reason in QUOTA_REASONS or not transient or attempt == tries:
+                raise
+            try:
+                existing = youtube.playlistItems().list(
+                    part="id", playlistId=playlist_id,
+                    videoId=video_id, maxResults=1).execute()
+                if existing.get("items"):
+                    return  # insert already committed; don't create a duplicate
+            except HttpError:
+                pass  # membership check failed -> fall through and retry insert
+            print(f"    transient {status} {reason} on insert; "
+                  f"retry {attempt}/{tries - 1} in {delay:.0f}s")
+            time.sleep(delay)
+            delay = min(delay * 2, 16.0)
+
+
 # ---------------------------------------------------------------------------
 # Argument validators (guard against destructive inputs)
 # ---------------------------------------------------------------------------
@@ -1021,8 +1064,17 @@ def build_ai_classifier(config: dict | None, playlists: list[dict],
             try:
                 raw = _ai_call(provider, model, api_key, endpoint,
                                sys_batch, user) or ""
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError,
-                    KeyError, IndexError, ValueError, json.JSONDecodeError) as exc:
+            except urllib.error.HTTPError as exc:
+                if exc.code in (401, 403, 429):
+                    print(f"  [AI] batch call failed ({exc.code}); disabling AI "
+                          "layer for this run (cascade continues).")
+                    state["disabled"] = True
+                    return  # systemic (bad key / forbidden / rate limit) -> stop
+                print(f"  [AI] batch call failed ({exc}); falling back to "
+                      "per-video for this group.")
+                continue
+            except (urllib.error.URLError, OSError, KeyError, IndexError,
+                    ValueError, json.JSONDecodeError) as exc:
                 print(f"  [AI] batch call failed ({exc}); falling back to "
                       "per-video for this group.")
                 continue
@@ -1119,16 +1171,7 @@ def perform_moves(youtube, to_move: list[dict], title_to_id: dict[str, str],
                 print(f"  SKIP (playlist '{p['target']}' missing, "
                       f"create_missing off): {title[:44]}")
                 continue
-            _api_execute(
-                lambda tid=target_id, vid=p["video_id"]: youtube.playlistItems().insert(
-                    part="snippet",
-                    body={"snippet": {
-                        "playlistId": tid,
-                        "resourceId": {"kind": "youtube#video", "videoId": vid},
-                    }},
-                ),
-                what="insert",
-            )
+            _insert_playlist_item(youtube, target_id, p["video_id"])
             _api_execute(
                 lambda pid=p["playlist_item_id"]: youtube.playlistItems().delete(id=pid),
                 what="delete",
