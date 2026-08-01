@@ -72,34 +72,32 @@ python youtube_cleaner.py playlists
 # Choose how videos get sorted (writes config.json). See "Classifier" below.
 python youtube_cleaner.py setup
 
-# Prefer to map by eye? Scan a playlist's REAL videos and build ONE offline page:
-# map each YouTube category your videos fall under to a playlist, split mixed
-# categories with per-video overrides, and (optional) add keyword rules that win
-# over the category map. Downloads a single self-contained config.json.
-python youtube_cleaner.py map --source PLxxxxxxxx --html map.html
-# Note: We need to provide the playlist id and not the playlist name
+# Tip: setup's "Map by eye" option ([2]) already scans a playlist and builds the
+# offline mapping page for you (categories + optional keywords -> config.json).
+# See "Map by eye" below. Always pass a playlist ID (PL...), never its name.
+
 # DRY-RUN: show what WOULD be deleted (older than 2 years) — no changes
 python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2
 
 # Actually delete
 python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2 --execute
 
-# DRY-RUN: sort videos out of a source playlist into topic playlists
+# DRY-RUN: sort videos out of a source playlist into topic playlists (prints the
+# full plan, changes nothing) — this is the everyday review step.
 python youtube_cleaner.py sort --source PLxxxxxxxx
-
-# Review first: write the FULL proposed plan to a file you can read/edit
-python youtube_cleaner.py sort --source PLxxxxxxxx --json plan.json
-
-# Or review point-and-click: write an OFFLINE interactive HTML page, open it in a
-# browser, fix any wrong targets via dropdowns, then Download corrected plan.json
-python youtube_cleaner.py sort --source PLxxxxxxxx --html plan.html
-python youtube_cleaner.py apply --plan corrected-plan.json --execute
 
 # Actually move them (creates target playlists as needed)
 python youtube_cleaner.py sort --source PLxxxxxxxx --execute
 
-# Fixed a wrong pick in plan.json? Apply the edited plan EXACTLY as written
-python youtube_cleaner.py apply --plan plan.json --execute
+# --- OPTIONAL: correct the plan before executing ------------------------------
+# Only needed to fix individual picks first — and it's the only point-and-click
+# way to review AI picks (the AI tier has no map page). Write the plan, edit it,
+# then apply EXACTLY what you approved (apply never re-classifies). See
+# "Accuracy & the review workflow" below.
+python youtube_cleaner.py sort --source PLxxxxxxxx --json plan.json   # editable JSON
+python youtube_cleaner.py sort --source PLxxxxxxxx --html plan.html   # or offline page
+python youtube_cleaner.py apply --plan plan.json --execute            # or corrected-plan.json
+# ------------------------------------------------------------------------------
 
 # Changed your mind? Reverse the last sort/apply run (videos go back)
 python youtube_cleaner.py undo            # dry-run: shows what would be restored
