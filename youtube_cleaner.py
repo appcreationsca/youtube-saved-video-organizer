@@ -521,13 +521,34 @@ def _category_map(config: dict, rules: dict, tier0: bool) -> dict:
     Priority: config's Tier-1 map (from `setup`) -> rules.json category_map ->
     (only when tier0=True) YouTube's STANDARD_CATEGORIES so the zero-config
     Tier-0 layer always has a universal fallback.
+
+    An EXPLICIT config `category_map` is honored even when empty ({}): a user who
+    mapped nothing on the category page meant "leave these", so we must not fall
+    through to the universal STANDARD_CATEGORIES. Only an ABSENT key triggers the
+    fallback.
     """
-    cfg_map = config.get("classify", {}).get("category_map")
-    if cfg_map:
-        return cfg_map
+    cls = config.get("classify", {})
+    if "category_map" in cls:
+        return cls["category_map"]
     if rules.get("category_map"):
         return rules["category_map"]
     return dict(STANDARD_CATEGORIES) if tier0 else {}
+
+
+def _normalize_mode(mode: str | None) -> str:
+    """Fold legacy/unknown classifier modes into a safe current one.
+
+    `ai` was removed (AI now runs inside cascade). An old or hand-edited
+    config.json with mode:"ai" must NOT silently run cascade-minus-AI while
+    printing "ai", so map it to cascade (where AI actually runs when enabled).
+    Any other unrecognized value also falls back to cascade so a typo never
+    skips every layer.
+    """
+    if mode in ("cascade", "category", "keyword"):
+        return mode
+    if mode == "ai":
+        print("Note: mode 'ai' was removed -- AI now runs inside cascade. Using cascade.")
+    return "cascade"
 
 
 def classify(meta: dict, rules: dict, config: dict | None = None,
@@ -2357,10 +2378,9 @@ function buildConfig(){{
   const classify = {{mode: mode, create_missing: true,
                      unmatched: 'leave', category_map: cat.cmap}};
   if (Object.keys(cat.overrides).length) classify.video_overrides = cat.overrides;
-  if (TIER === 'both') {{
-    const kw = buildRules().keyword_rules;
-    if (kw.length) classify.keyword_rules = kw;   // embedded -> self-contained
-  }}
+  // Always embed keyword_rules for the combined page (even []), so the config is
+  // fully self-contained and a leftover rules.json can never fire in cascade.
+  if (TIER === 'both') classify.keyword_rules = buildRules().keyword_rules;
   return {{classify: classify}};
 }}
 
@@ -2725,7 +2745,7 @@ def cmd_sort(args) -> None:
     rules = load_rules()
     config = load_config()
     rules = _effective_rules(rules, config)
-    mode = getattr(args, "mode", None) or config.get("classify", {}).get("mode") or "cascade"
+    mode = _normalize_mode(getattr(args, "mode", None) or config.get("classify", {}).get("mode"))
     create_missing = config.get("classify", {}).get("create_missing", True)
 
     owned = fetch_playlists(youtube)
@@ -3079,7 +3099,7 @@ def cmd_autosort(args) -> None:
     rules = load_rules()
     config = load_config()
     rules = _effective_rules(rules, config)
-    mode = config.get("classify", {}).get("mode") or "cascade"
+    mode = _normalize_mode(config.get("classify", {}).get("mode"))
     create_missing = config.get("classify", {}).get("create_missing", True)
     owned = fetch_playlists(youtube)
     title_to_id = {p["title"]: p["id"] for p in owned}

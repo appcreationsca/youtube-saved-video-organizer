@@ -163,7 +163,7 @@ first (`autopurge --playlist <id> --years N`). Deletions are permanent.
 | Option         | Meaning                                                                    |
 |----------------|----------------------------------------------------------------------------|
 | `--source`     | Playlist ID to sort videos **out of** (e.g. an "Unsorted" catch-all). **Required.** |
-| `--mode`       | Force one classifier layer for this run: `category`, `keyword`, `ai`, or `cascade` (default). Omit to use `config.json`. |
+| `--mode`       | Force one classifier layer for this run: `category`, `keyword`, or `cascade` (default). Omit to use `config.json`. |
 | `--execute`    | Actually move (asks you to type `MOVE` to confirm). Omit for a safe dry-run. |
 | `--max-moves`  | Safety cap per run (default 40, min 1). Each move costs ~100 quota units.   |
 | `--json PATH`  | Also write the **full** proposed plan (every video, not truncated) to a JSON file you can read, share, or **edit** before applying. |
@@ -309,7 +309,7 @@ video and the first hit wins. You never pick a tier per video.
 
 | Tier | Name | Setup | What it does |
 |------|------|-------|--------------|
-| **0** | Category (universal) | zero-config | Sorts by YouTube's own `categoryId` (Music, Gaming, Education…) into auto-named playlists. Works for anyone. |
+| **0** | Category (universal) | `setup` → `[1]` (or `sort --mode category`) | Sorts by YouTube's own `categoryId` (Music, Gaming, Education…) into auto-named playlists. Works for anyone. |
 | **1** | Category → **my** playlists (+ optional keywords) | `setup` → `[2]`, or `map` | On one offline page: maps the categories you **actually have** to **your** playlist names, lets you **override individual videos** when a category holds mixed topics, and (optional) adds **keyword rules** built from your channels & title words. A matching keyword **wins over** the category map. **Recommended.** |
 | **2** | AI classify | `setup` → `[3]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
 
