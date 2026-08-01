@@ -86,9 +86,6 @@ python youtube_cleaner.py clean --playlist PLxxxxxxxx --years 2 --execute
 # full plan, changes nothing) — this is the everyday review step.
 python youtube_cleaner.py sort --source PLxxxxxxxx
 
-# Actually move them (creates target playlists as needed)
-python youtube_cleaner.py sort --source PLxxxxxxxx --execute
-
 # --- OPTIONAL: correct the plan before executing ------------------------------
 # Only needed to fix individual picks first — and it's the only point-and-click
 # way to review AI picks (the AI tier has no map page). Write the plan, edit it,
@@ -98,6 +95,9 @@ python youtube_cleaner.py sort --source PLxxxxxxxx --json plan.json   # editable
 python youtube_cleaner.py sort --source PLxxxxxxxx --html plan.html   # or offline page
 python youtube_cleaner.py apply --plan plan.json --execute            # or corrected-plan.json
 # ------------------------------------------------------------------------------
+
+# Actually move them (creates target playlists as needed)
+python youtube_cleaner.py sort --source PLxxxxxxxx --execute
 
 # Changed your mind? Reverse the last sort/apply run (videos go back)
 python youtube_cleaner.py undo            # dry-run: shows what would be restored
