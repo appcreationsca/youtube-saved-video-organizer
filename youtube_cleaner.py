@@ -72,41 +72,16 @@ DEFAULT_MAX_DELETES = 150
 # so the per-run cap for moves is deliberately lower than for deletes.
 DEFAULT_MAX_MOVES = 40
 
-# Fallback taxonomy used when rules.json is absent. Keyword rules are matched
-# against the video title + channel (case-insensitive substring). This is
-# user-authored rule matching and the API-provided categoryId only -- it does
-# NOT infer/estimate a video's category with ML, which YouTube policy restricts.
+# Minimal fallback used ONLY when there is no config.json AND no rules.json (a
+# bare `sort` before `setup`). Deliberately empty and non-opinionated: no built-in
+# keyword rules (they used to silently invent playlists like "Investing & Stocks"
+# in cascade) and no default_playlist (nothing is dumped into an "Unsorted"
+# bucket). The universal category fallback still comes from STANDARD_CATEGORIES
+# via _category_map, so a zero-config run sorts by YouTube category. Power users
+# who want keyword rules provide their own rules.json (see rules.example.json).
 DEFAULT_RULES = {
-    "keyword_rules": [
-        {"playlist": "Investing & Stocks",
-         "any": ["stock", "invest", "nifty", "sensex", "portfolio", "trading",
-                 "mutual fund", "dividend", "crypto", "bitcoin"]},
-        {"playlist": "Learning & Tutorials",
-         "any": ["tutorial", "course", "how to", "how-to", "learn", "explained",
-                 "beginners", "masterclass", "lecture"]},
-        {"playlist": "Travel & Tourism",
-         "any": ["travel", "tourism", "trip", "vlog", "destination", "itinerary",
-                 "backpack", "tour"]},
-    ],
-    # YouTube video category IDs -> target playlist title.
-    "category_map": {
-        "1": "Film & Animation",
-        "2": "Autos & Vehicles",
-        "10": "Music",
-        "15": "Pets & Animals",
-        "17": "Sports",
-        "19": "Travel & Events",
-        "20": "Gaming",
-        "22": "People & Vlogs",
-        "23": "Comedy",
-        "24": "Entertainment",
-        "25": "News & Politics",
-        "26": "Howto & Style",
-        "27": "Education",
-        "28": "Science & Technology",
-    },
-    # Where to put videos that match no rule and no category. Set to null to skip.
-    "default_playlist": "Unsorted",
+    "keyword_rules": [],
+    "default_playlist": None,
 }
 
 # Machine-written config produced by the `setup` wizard and read by `sort` /
@@ -496,10 +471,9 @@ def _effective_rules(rules: dict, config: dict) -> dict:
     The combined map page writes keyword rules straight into
     ``config.classify.keyword_rules`` so config.json is fully self-contained --
     there is no second file to forget or leave stale. When that key is present
-    (even as an empty list, meaning "no keyword rules"), it WINS: rules.json and
-    the built-in DEFAULT_RULES keyword rules are ignored. This is what stops a
-    leftover rules.json -- or the built-in "Travel & Tourism" fallback rule --
-    from silently grabbing videos in cascade mode.
+    (even as an empty list, meaning "no keyword rules"), it WINS: any leftover
+    rules.json is ignored. This is what stops a stale rules.json from silently
+    grabbing videos in cascade mode.
 
     When the key is absent, behaviour is unchanged: rules.json (or DEFAULT_RULES)
     is used, so existing power-user setups keep working.
@@ -509,9 +483,8 @@ def _effective_rules(rules: dict, config: dict) -> dict:
     if kw is None:
         return rules
     # keyword_rules is authoritative -> so is the unmatched fallback. Take the
-    # "collect leftovers" playlist from the CONFIG (unmatched), NOT from the
-    # built-in DEFAULT_RULES.default_playlist ("Unsorted"). "leave"/None means no
-    # catch-all, so the heads-up won't wrongly list an "Unsorted" target either.
+    # "collect leftovers" playlist from the CONFIG (unmatched). "leave"/None means
+    # no catch-all, so the heads-up won't wrongly list a phantom target either.
     unmatched = cls.get("unmatched", "leave")
     default_pl = None if unmatched in (None, "leave") else unmatched
     return {"keyword_rules": kw, "default_playlist": default_pl}
@@ -562,18 +535,17 @@ def classify(meta: dict, rules: dict, config: dict | None = None,
     """Return the target playlist title for a video, or None to leave it alone.
 
     Layers (first match wins):
-      per-video override (config)    -> Tier 1 hand-pick, priority 0
-      keyword rules (title+channel)  -> Tier 2, priority 1
-      AI classify (optional)         -> Tier 3, priority 2
-      category map (config or rules) -> Tier 0/1, priority 3
+      per-video override (config)    -> Tier 1 (hand-pick), priority 0
+      keyword rules (title+channel)  -> Tier 1 (keyword),   priority 1
+      AI classify (optional)         -> Tier 2,             priority 2
+      category map (config or rules) -> Tier 0/1,           priority 3
 
     A per-video override (config.classify.video_overrides[video_id]) always
-    wins, in every mode except "keyword"/"ai" -- it is a deliberate hand-pick
-    made on the Tier-1 map page and must beat the category map.
+    wins, in every mode except "keyword" -- it is a deliberate hand-pick made on
+    the Tier 1 map page and must beat the category map.
 
     `mode` forces a single layer for one run:
       "keyword"  -> only keyword rules (+ rules.default_playlist)
-      "ai"       -> only the AI classifier (Tier 3)
       "category" -> per-video override, then the category map (Tier 0/1)
       "cascade"/None -> override then keyword then AI then category then unmatched
 
@@ -606,8 +578,6 @@ def classify(meta: dict, rules: dict, config: dict | None = None,
 
     if mode == "keyword":
         return by_keyword() or rules.get("default_playlist")
-    if mode == "ai":
-        return ai(meta) if ai else None
     if mode == "category":
         ov = by_override()
         if ov is not None:
@@ -653,8 +623,9 @@ def warn_missing_rule_targets(rules: dict, owned: list[dict],
                               create_missing: bool) -> None:
     """Heads-up listing keyword-rule targets that don't exist in the account yet.
 
-    Keyword rules point at fixed playlist NAMES (unlike Tier-1/Tier-3, which bind
-    to the user's real playlists). Someone who copied rules.example.json needs to
+    Keyword rules point at fixed playlist NAMES (unlike the category map and AI
+    layers, which bind to the user's real playlists). Someone who copied
+    rules.example.json needs to
     know which targets a run would CREATE vs. SKIP before anything happens."""
     owned_titles = {p["title"] for p in owned}
     missing = [t for t in _keyword_targets(rules) if t not in owned_titles]
@@ -672,7 +643,7 @@ def warn_missing_rule_targets(rules: dict, owned: list[dict],
 
 
 # ---------------------------------------------------------------------------
-# Tier 3: optional AI classification (bring-your-own-key / local Ollama)
+# Tier 2: optional AI classification (bring-your-own-key / local Ollama)
 # ---------------------------------------------------------------------------
 
 # The abstain level controls recall vs precision (config: classify.ai.abstain).
@@ -1531,11 +1502,11 @@ def cmd_setup(args) -> None:
         if choice not in {"1", "2", "3"}:
             print("    Please enter 1, 2, or 3.")
 
-    # keyword_rules is written as an AUTHORITATIVE empty list so the built-in
-    # DEFAULT_RULES keyword rules (Investing & Stocks / Travel & Tourism / ...)
-    # never fire silently in cascade. The combined "Map by eye" page ([2]) is the
-    # only flow that adds real keyword rules; it writes its own config and returns
-    # before this dict is saved, so [1] (category) and [3] (AI) both stay clean.
+    # keyword_rules is written as an AUTHORITATIVE empty list so no stray keyword
+    # rules (a leftover rules.json) can fire silently in cascade. The combined
+    # "Map by eye" page ([2]) is the only flow that adds real keyword rules; it
+    # writes its own config and returns before this dict is saved, so [1]
+    # (category) and [3] (AI) both stay clean.
     cfg: dict = {"mode": "cascade", "create_missing": True, "unmatched": "leave",
                  "keyword_rules": []}
 
@@ -1547,7 +1518,7 @@ def cmd_setup(args) -> None:
         print("time a video needs one. Run a dry-run first to preview what gets created.\n")
 
     elif choice == "2":
-        print("\nMap from your ACTUAL saved videos -- not a blind list. Pick a playlist")
+        print("\nMap from your ACTUAL saved videos. Pick a playlist")
         print("to scan; the page shows only the categories you really have (each")
         print("expandable to override individual videos), plus an OPTIONAL keyword")
         print("section (auto-suggested from your channels/titles, or add your own).")
@@ -1618,13 +1589,12 @@ def cmd_setup(args) -> None:
     if choice == "3":
         print("\nAI usage:")
         print("  sort --source <ID>            # cascade: keyword -> AI -> category (AI IS used)")
-        print("  sort --source <ID> --mode ai  # force AI-only for this run")
 
 
 def _pick_source_playlist(owned) -> tuple[str, str] | None:
     """Prompt the user to choose one of their playlists (by number) or paste a
     playlist ID to scan. Returns (id, title) or None if cancelled/none exist.
-    Shared by the content-derived setup flows for Tier 1 and Tier 2."""
+    Shared by the content-derived setup flows for the Tier 1 map."""
     if not owned:
         print("No playlists found in your account to scan.")
         return None
@@ -1972,8 +1942,8 @@ watch now free best top most tutorial guide tips tricks vlog channel subscribe l
 def _extract_keyword_candidates(items: list[dict], meta: dict,
                                 max_channels: int = 15, max_terms: int = 20,
                                 min_videos: int = 2) -> dict:
-    """Mine the user's OWN saved videos for keyword-rule candidates, so Tier 2 is
-    grounded in their content instead of a generic starter list.
+    """Mine the user's OWN saved videos for keyword-rule candidates, so the Tier 1
+    keyword layer is grounded in their content instead of a generic starter list.
 
     Returns {"channels": [...], "terms": [...]} where each entry is
     {"key", "count", "examples"}:
@@ -2159,7 +2129,7 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
                     '\uff0b Add keyword</button></div>')
         else:
             head = ('<h2 class="kwh">Keyword rules '
-                    '<span class="kwh-sub">Tier 2 &middot; a rule matches every video whose title/channel contains it</span></h2>'
+                    '<span class="kwh-sub">Tier 1 &middot; a rule matches every video whose title/channel contains it</span></h2>'
                     '<p class="lead">These channels and title words come from <b>your own</b> saved '
                     'videos. Mapping one writes a keyword rule: every video whose title or channel '
                     'contains it goes to that playlist. Leave any you don\u2019t want as \u201cskip\u201d.</p>')
@@ -2193,7 +2163,7 @@ def render_map_html(source: dict, groups: dict[str, list[dict]],
         sub_line = (f"SOURCE: {src_title} \u00b7 {src_id} \u00b7 "
                     f"{n_kw} keyword candidate(s)")
         intro_lead = ("These channels and title words come from <b>your own</b> saved "
-                      "videos. Map any to a playlist to write a keyword rule (Tier 2): "
+                      "videos. Map any to a playlist to write a keyword rule (Tier 1): "
                       "every video whose title or channel contains it goes there. Then "
                       "<b>Download</b> \u2014 you get <b>rules.json</b> plus a "
                       "<b>config.json</b> pinned to keyword mode \u2014 and run a sort.")
@@ -2767,7 +2737,7 @@ def cmd_sort(args) -> None:
         )
     title_to_id = {p["title"]: p["id"] for p in owned}
     ai = None
-    if mode in ("cascade", "ai"):
+    if mode == "cascade":
         samples = None
         if config.get("classify", {}).get("ai", {}).get("enabled"):
             print("Grounding AI with a few example titles per playlist...")
@@ -3114,7 +3084,7 @@ def cmd_autosort(args) -> None:
     owned = fetch_playlists(youtube)
     title_to_id = {p["title"]: p["id"] for p in owned}
     ai = None
-    if mode in ("cascade", "ai"):
+    if mode == "cascade":
         protected_ids = {p["id"] for p in owned if p["title"] in protect}
         samples = None
         if config.get("classify", {}).get("ai", {}).get("enabled"):
@@ -3375,11 +3345,11 @@ def build_parser() -> argparse.ArgumentParser:
                                       "playlists using rules.json (creates them if needed).")
     srt.add_argument("--source", required=True,
                      help="Source playlist ID to sort FROM (e.g. an 'Unsorted' playlist).")
-    srt.add_argument("--mode", choices=["cascade", "category", "keyword", "ai"], default=None,
-                     help="Force one classifier layer for this run: 'category' (Tier 0/1), "
-                          "'keyword' (Tier 2 rules.json), 'ai' (Tier 3, needs ai.enabled in "
-                          "config.json), or 'cascade' (keyword->AI->category, the default). "
-                          "Omit to use config.json / cascade.")
+    srt.add_argument("--mode", choices=["cascade", "category", "keyword"], default=None,
+                     help="Force one classifier layer for this run: 'category' (Tier 0/1) or "
+                          "'keyword' (Tier 1 rules.json). Default 'cascade' runs "
+                          "override->keyword->AI->category (AI only when ai.enabled in "
+                          "config.json). Omit to use config.json / cascade.")
     srt.add_argument("--execute", action="store_true",
                      help="Actually move (after a typed confirmation). Omit for a safe dry-run.")
     srt.add_argument("--max-moves", type=positive_int, default=DEFAULT_MAX_MOVES,

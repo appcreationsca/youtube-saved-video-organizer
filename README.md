@@ -301,7 +301,7 @@ placeholders YouTube leaves behind) from your playlists to free up space. Scans
 
 ---
 
-## Classifier — how videos get sorted (4 tiers)
+## Classifier — how videos get sorted (3 tiers)
 
 You **enable layers once** (via `setup`, which writes `config.json`); at sort time
 the engine runs the enabled layers as an automatic **first-match cascade** per
@@ -310,9 +310,8 @@ video and the first hit wins. You never pick a tier per video.
 | Tier | Name | Setup | What it does |
 |------|------|-------|--------------|
 | **0** | Category (universal) | zero-config | Sorts by YouTube's own `categoryId` (Music, Gaming, Education…) into auto-named playlists. Works for anyone. |
-| **1** | Category → **my** playlists | `setup` → `[2]`, or `map` | Maps the categories you **actually have** to one of **your** playlist names on the offline page, and lets you **override individual videos** when one category holds mixed topics. **Recommended.** |
-| **2** | Keyword rules | `setup` → `[2]` (same page), or `map` | Optional keyword rules built from **your** channels & title words, plus any you type in. When a keyword matches it **wins over** the category map. Substring match on title + channel; see `rules.example.json`. |
-| **3** | AI classify | `setup` → `[3]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
+| **1** | Category → **my** playlists (+ optional keywords) | `setup` → `[2]`, or `map` | On one offline page: maps the categories you **actually have** to **your** playlist names, lets you **override individual videos** when a category holds mixed topics, and (optional) adds **keyword rules** built from your channels & title words. A matching keyword **wins over** the category map. **Recommended.** |
+| **2** | AI classify | `setup` → `[3]` | Reads each title and picks from your playlists. Off by default; **bring your own key** or run local Ollama. |
 
 **One combined page, one file.** `setup → [2]` (and `map`) build a **single** offline
 page with the category cards **and** an optional keyword section, and download **one
@@ -333,7 +332,7 @@ rule from silently grabbing videos. Power users can still keep a hand-written `r
 **Advanced single-tier pages:** `map --tier category` builds a category-only page
 (`config.json` pinned to `mode: category`); `map --tier keyword` builds a keyword-only
 page (`rules.json` + `config.json` pinned to `mode: keyword`). Or force a single layer for
-one run with `sort --mode keyword|ai|category`.
+one run with `sort --mode keyword|category`.
 
 **Create-on-demand:** a mapped playlist that doesn't exist yet is created the
 **first** time a video actually routes to it (idempotent by name — no duplicates
@@ -347,13 +346,13 @@ git-ignored (it contains your playlist names). All fields live under `classify`:
 
 | Field | Meaning |
 |-------|---------|
-| `mode` | `cascade` (default, written by the combined map page), `category`, `keyword`, or `ai`. `sort --mode` overrides it. |
+| `mode` | `cascade` (default, written by the combined map page), `category`, or `keyword`. AI runs inside `cascade` when `ai.enabled`. `sort --mode` overrides it. |
 | `create_missing` | `true` = create a mapped playlist on first use; `false` = skip + warn. |
 | `unmatched` | `"leave"` (default) or a playlist name to collect everything unmatched. |
 | `category_map` | `{ "<categoryId>": "<your playlist name>" }` — the category map (from `setup → [2]` or `map`). When absent, Tier 0 falls back to YouTube's standard category names. |
 | `video_overrides` | `{ "<videoId>": "<playlist name>" }` — **per-video exceptions**. Checked **first**, so a single video can override its category's mapping. Use the sentinel `"__leave__"` to leave just that one video in place. Written by the map page when you override individual videos. |
 | `keyword_rules` | `[ { "any": ["<keyword>"], "playlist": "<name>" } ]` — **optional** keyword rules embedded straight into the config by the combined map page. Checked **after** per-video overrides but **before** the category map. When this key is present (even `[]`) it is **authoritative**: `rules.json` and the built-in defaults are ignored. Omit the key to fall back to `rules.json`. |
-| `ai.enabled` | `false` by default. `true` turns Tier 3 on. |
+| `ai.enabled` | `false` by default. `true` turns Tier 2 on. |
 | `ai.provider` | `ollama` (free, local, no key) · `openai` · `anthropic` · `gemini`. |
 | `ai.model` | Model name for that provider (e.g. `llama3.1`, `gpt-4o-mini`). |
 | `ai.endpoint` | Ollama base URL (default `http://localhost:11434`). Ollama only. |
@@ -423,7 +422,7 @@ builds a category-only page (`config.json` with `mode: category` — keyword rul
 run) and `map --tier keyword` builds a keyword-only page (`rules.json` + a `config.json`
 with `mode: keyword`).
 
-### AI (Tier 3) — bring your own key or run local
+### AI (Tier 2) — bring your own key or run local
 
 AI is **optional and off by default**. When enabled it only ever returns one of
 **your own** playlist names (or leaves the video alone), and it degrades safely:
@@ -444,7 +443,9 @@ layer for that run, and the cascade continues.
   # NEW terminals — reopen PowerShell after running this):
   setx OPENAI_API_KEY "sk-..."
 
-  python youtube_cleaner.py sort --source PLxxxxxxxx --mode ai
+  # AI is enabled in config (setup -> [3] writes mode: cascade), so plain sort
+  # runs the cascade and uses AI automatically when nothing earlier matched:
+  python youtube_cleaner.py sort --source PLxxxxxxxx
   ```
 
   Classifying titles is tiny (~500 videos ≈ a few cents). The key is never written
@@ -456,11 +457,11 @@ layer for that run, and the cascade continues.
   > missing, the tool **prompts you to paste it once** (hidden input, kept in memory
   > for that run only, never saved). Schedulers skip the prompt and just disable AI.
 
-**`sort` vs `sort --mode ai`:** plain `sort` uses whatever `mode` your `config.json` sets.
-When you enable AI (`setup → [3]` writes `mode: cascade`), plain `sort` runs the full
-**cascade** (keyword → AI → category), so AI is *already* used when nothing earlier
-matched. Use `--mode ai` only to force **AI-only** for a run (skip keyword + category) —
-handy for testing the model or re-classifying a playlist purely by AI.
+**How AI runs:** plain `sort` uses whatever `mode` your `config.json` sets. When you
+enable AI (`setup → [3]` writes `mode: cascade`), `sort` runs the full **cascade**
+(per-video override → keyword → AI → category), so AI is used automatically whenever
+nothing earlier matched. There's no separate "AI-only" switch — the cascade is the one
+path, which keeps your hand-picked overrides and keyword rules winning over the model.
 
 
 **Efficient by default:** the AI layer **batches** titles (50 per request via
@@ -744,10 +745,10 @@ If this works end-to-end on your account, it validates the YouTube half of the
 app: OAuth, playlist enumeration, ownership checks, and rule-based bulk deletion.
 
 > **A note on AI sorting & YouTube policy:** YouTube's Developer Policies restrict
-> *inferring/estimating* a video's content category via the API. Tier 3 here does
+> *inferring/estimating* a video's content category via the API. Tier 2 here does
 > not use the API for classification — it reads the title/channel text you already
 > fetched and asks a model **you** run (local Ollama) or **you** pay for (your own
 > key) to pick from **your** playlists. Coarse sorting from the API's own
-> `categoryId` (Tier 0/1) and your keyword rules (Tier 2) remain the zero-cost,
+> `categoryId` (Tier 0/1) and your keyword rules (Tier 1) remain the zero-cost,
 > lowest-risk defaults; AI stays optional and off by default.
 

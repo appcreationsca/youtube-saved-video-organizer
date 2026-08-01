@@ -1,5 +1,5 @@
 {
-  "_comment": "GENERIC Tier-2 keyword example. Copy to rules.json and edit for YOUR playlists. Case-insensitive SUBSTRING match against 'title + channel'. FIRST matching rule wins, so ORDER = PRIORITY (put narrow/high-priority rules first). Rename 'playlist' to a name in YOUR account; a mapped playlist is created on first match if create_missing=true. Keep keywords long/distinctive to avoid false hits (bare 'ai' matches 'email', bare 'earn' matches 'learn', bare 'tour' matches 'tournament').",
+  "_comment": "GENERIC Tier-1 keyword example. Copy to rules.json and edit for YOUR playlists. Case-insensitive SUBSTRING match against 'title + channel'. FIRST matching rule wins, so ORDER = PRIORITY (put narrow/high-priority rules first). Rename 'playlist' to a name in YOUR account; a mapped playlist is created on first match if create_missing=true. Keep keywords long/distinctive to avoid false hits (bare 'ai' matches 'email', bare 'earn' matches 'learn', bare 'tour' matches 'tournament').",
 
   "keyword_rules": [
     {
